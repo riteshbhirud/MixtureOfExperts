@@ -33,9 +33,6 @@ export StandardExpert, CURExpert, GatedExpert
 # Main functions
 export create_moe_config, create_moe_layer
 export compute_gates, compute_loss
-export MoEPreNormResidual, LlamaMoEBlock, MoETransformerBlock
-export MoEHGFLlamaModel, MoEHGFLlamaForCausalLM  
-export create_hgf_moe_config, load_moe_hgf_model, analyze_hgf_moe_model
 export load_balance_score
 
 include("gating/base.jl")
@@ -56,7 +53,6 @@ include("core/utils.jl")
 include("core/router.jl")
 include("core/moe_layer.jl")
 
-include("integrations/llama2_real_integration.jl")
-include("integrations/transformers_real_integration.jl")
+
 
 end
