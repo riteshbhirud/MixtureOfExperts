@@ -63,7 +63,7 @@ function MoELayer(config::MoEConfig)
 end
 
 function create_experts(config::MoEConfig)
-    expert_hidden_dim = config.hidden_dim ÷ config.num_experts
+    expert_hidden_dim = config.hidden_dim  # FIXED: Don't divide by num_experts!
     
     experts = []
     for i in 1:config.num_experts
@@ -247,15 +247,32 @@ function apply_capacity_constraint(expert_indices, expert_gates, capacity_factor
     return expert_indices, expert_gates
 end
 
-function update_stats!(stats::Dict, expert_indices, router_probs)
+function update_stats!(stats::Dict, expert_indices, router_probs; reset_counters::Bool = false)
+    if reset_counters
+        fill!(stats[:tokens_per_expert], 0)
+    end
+    
     for idx in expert_indices
-        if idx > 0
+        if idx > 0 && idx <= length(stats[:tokens_per_expert])
             stats[:tokens_per_expert][idx] += 1
         end
     end
     
-    entropy = -sum(router_probs .* log.(router_probs .+ 1e-8), dims=1)
-    push!(stats[:routing_entropy], mean(entropy))
+    # Compute entropy for current batch only
+    batch_entropy = -sum(router_probs .* log.(router_probs .+ 1e-8), dims=1)
+    push!(stats[:routing_entropy], mean(batch_entropy))
+end
+
+"""
+    reset_stats!(moe::MoELayer)
+
+Reset training statistics to start fresh.
+"""
+function reset_stats!(moe::MoELayer)
+    fill!(moe.training_stats[:tokens_per_expert], 0)
+    empty!(moe.training_stats[:routing_entropy])
+    moe.training_stats[:capacity_overflow] = 0
+    return nothing
 end
 
 """

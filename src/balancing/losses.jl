@@ -13,15 +13,22 @@ struct SwitchTransformerLoss <: LoadBalancingLoss
 end
 
 function compute_loss(loss_fn::SwitchTransformerLoss, expert_indices::AbstractMatrix, router_probs::AbstractMatrix)
-    N = size(router_probs, 1)  
-    T = size(router_probs, 2)  
+    N = size(router_probs, 1)  # num_experts
+    total_assignments = length(expert_indices)
     
+    # Count actual expert assignments (not argmax of probs)
     f = zeros(Float32, N)
-    for t in 1:T
-        chosen_expert = argmax(router_probs[:, t])
-        f[chosen_expert] += 1.0f0
+    
+    for expert_idx in expert_indices
+        if expert_idx > 0 && expert_idx <= N
+            f[expert_idx] += 1.0f0
+        end
     end
-    f ./= T
+    
+    # Normalize by total assignments
+    if total_assignments > 0
+        f ./= total_assignments
+    end
     
     P = mean(router_probs, dims=2)[:]
     

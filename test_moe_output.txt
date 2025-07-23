@@ -1,0 +1,577 @@
+
+TEST WITH stories42M.bin and tokenizer.bin
+
+Make sure stories42M.bin and tokenizer.bin are in your current directory!
+
+============================================================
+ Loading original Llama2 model...
+ Original model loaded successfully!
+   Layers: 8
+   Dim: 512
+   Vocab size: 32000
+   Parameters: ~42M
+
+ Testing original model generation...
+Original model output:
+ Tim was happy. He was playing in the park with his friends. They were running around and having fun. Suddenly, Tim saw something shiny in the grass. He went to pick it up. It was a big, shiny coin. Tim was so excited. He wanted to show it to his friends.
+But then, something bad happened. Tim tripped and the coin fell to the ground. It was broken. Tim was so sad. He wanted to cry.
+His friends saw what happened. They wanted to help. They all looked around and found some glue. They put the broken coin back together. It was not perfect, but it was still special.
+Tim was so happy. He thanked his friends for helping him. They all smiled and went back to playing. Tim was so glad he had such good friends.
+-------
+achieved tok/s: 193.14
+
+ Converting to MoE model...
+Converting Llama2 model to MoE...
+  Original layers: 8
+  MoE layers: [2, 4]
+  Experts per MoE layer: 4
+  Expert type: gated
+  Initialization strategy: perturb
+  Preserving dense layer 1...
+  Converting layer 2 to MoE...
+  Preserving dense layer 3...
+  Converting layer 4 to MoE...
+  Preserving dense layer 5...
+  Preserving dense layer 6...
+  Preserving dense layer 7...
+  Preserving dense layer 8...
+ Model conversion completed successfully
+  Total parameters: 70757888
+  Active parameters: 62303744
+ MoE conversion completed!
+   MoE layers: [2, 4]
+   Experts per layer: 4
+   Routing: Top-2
+
+ Testing MoE model generation...
+MoE model output:
+ Tim was happy. He was playing in the park with his friends. He saw a big slide and wanted to go down it. He ran to the slide and climbed up the steps. He was so excited.
+But then he saw something strange. There was a big hole in the slide. It was very deep and dark. Tim was scared. He did not want to go down the slide. He wanted to go back down.
+He called his friends. They came to the slide. They looked at the hole. They saw something shiny in the hole. It was a coin. Tim's friend, Sam, picked it up. He said, "Look, Tim, I found a coin. It is shiny and round. Maybe it is a lucky coin."
+Tim was not sure. He said, "Sam, that is not a lucky coin. That is a coin. It is not a toy. It is for people who need help. You should give it back to the person who lost it."
+Sam did not listen. He said, "No, Tim, it is a lucky coin. It is a special coin. It can make wishes come true. I want to keep it. It is mine."
+Tim was angry. He said, "Sam, you are being silly. You do not need a lucky coin. You do not need to give it back. It is not yours. It is mine. I found it. I want to go down the slide."
+Tim and Sam started to argue. They raised their voices. They pulled the coin. They did not see the man who was watching them. He was wearing a hat and a coat. He had a big smile. He said, "Hello, boys, what are you doing?"
+Tim and Sam stopped fighting. They looked at the man. They said, "We are playing. We are playing on the slide. We have a coin. It is a lucky coin. We want to go down the slide."
+The man said, "That is nice, boys, but you are not lucky. You are silly. You do not need a coin. You need a slide. You need a coin. You need a slide. You need a slide. You need a slide. You need a slide. You need a slide. You need a slide. You need a slide. You need a slide. You need a slide. You need a slide."
+Tim and Sam looked at each other. They felt sorry. They said, "Sorry, sir, sorry, sir. We did not know. We did not mean to be silly. We did not mean to be silly. We did not mean to be silly. We are sorry. We are not silly. We are just kids. We want a slide. A slide. A slide."
+The man said, "That is good, boys, that is good. You are very smart and brave. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide. You can have a slide
+-------
+Generation time: 7.556 seconds
+Tokens generated: 1024
+Tokens per second: 135.52
+MoE layer calls: 2048
+Expert activations: 4096
+Avg experts per MoE call: 2.00
+Routing time: 0.754% of total
+Expert compute time: 20.951% of total
+
+--- Expert Usage Statistics ---
+Layer 2:
+  Total expert activations: 2048
+    Expert  1:  334 activations (16.3%)
+    Expert  2:  616 activations (30.1%)
+    Expert  3:  469 activations (22.9%)
+    Expert  4:  629 activations (30.7%)
+  Load balance score: 0.652 (1.0 = perfect)
+
+Layer 4:
+  Total expert activations: 2048
+    Expert  1:  334 activations (16.3%)
+    Expert  2:  616 activations (30.1%)
+    Expert  3:  469 activations (22.9%)
+    Expert  4:  629 activations (30.7%)
+  Load balance score: 0.652 (1.0 = perfect)
+
+
+ Model Comparison:
+========================================
+Parameter counts:
+  Original:    58073600
+  MoE Total:   70757888
+  MoE Active:  62303744
+  Efficiency:  88.1%
+
+ Generation Comparison Tests
+========================================
+
+--- Test 1: "Once upon a time" ---
+Original:  Once upon a time, there was a little girl named Lily. She loved to play outside in the sunshine. One day, she saw a big, yellow flower in the garden. It was a sunflower! Lily thought it was the most beautiful flower she had ever seen.
+Lily's mom came outside and saw the sunflower too. "Wow, that's a big flower!" she said. "Let's pick it and put it in a vase." Lily was so excited to have the sunflower in her room.
+Later that day, Lily's friend came over to play. "Look at my sunflower!" Lily said, showing her friend the flower. "It's so pretty!" her friend said. "I wish I could have a sunflower like that." Lily smiled and said, "Maybe we can plant some seeds and grow our own sunflowers!" Her friend smiled and said, "That's a great idea!"
+-------
+achieved tok/s: 190.41
+MoE:       Once upon a time, there was a little girl named Lily. She loved to play outside in the sunshine. One day, she went to the park with her mom. They saw a big tree with lots of leaves. Lily wanted to climb it, but her mom said it was too high.
+Lily saw a boy playing with a ball. She asked him if she could play too. The boy said yes and they started to play together. They had so much fun!
+After a while, Lily's mom called her to go home. Lily said goodbye to the boy and ran to her mom. She was so happy to have made a new friend.
+When they got home, Lily's mom asked her if she wanted to have some cookies. Lily said yes and her mom gave her a cookie. It was so yummy! Lily said, "This cookie is so good!" Her mom smiled and said, "I'm glad you like it."
+-------
+Generation time: 1.305 seconds
+Tokens generated: 208
+Tokens per second: 159.35
+MoE layer calls: 416
+Expert activations: 832
+Avg experts per MoE call: 2.00
+Routing time: 0.000% of total
+Expert compute time: 19.383% of total
+
+
+--- Test 2: "The little girl" ---
+Original:  The little girl was very excited. She was going to the park with her mom. She put on her shoes and ran outside.
+When they got to the park, the little girl saw a big slide. She wanted to go down it, but she was scared. Her mom said, "Don't worry, I'll be right here."
+The little girl climbed up the ladder and sat at the top. She was so excited! She looked down and saw her mom smiling. She took a deep breath and slid down the slide.
+When she got to the bottom, she was so happy. She ran back to her mom and said, "That was so much fun!"
+Her mom smiled and said, "I'm glad you had fun. Now let's go get some ice cream."
+The little girl was so excited. She ran to the ice cream truck and got a cone. She was so happy and excited. She couldn't wait to go back to the park and slide down the big slide again.
+-------
+achieved tok/s: 194.57
+MoE:       The little girl was very excited. She was going to the park with her mom. She had never been to the park before and she couldn't wait to explore.
+When they arrived, the little girl saw a big slide. She wanted to go down it, but her mom said it was too dangerous. The little girl was disappointed, but she knew her mom was right.
+The little girl and her mom went to the swings. The little girl was so excited. She wanted to go higher and higher. She was having so much fun.
+Suddenly, the little girl heard a loud noise. She looked up and saw a big bird flying in the sky. It was so beautiful. The little girl was so excited. She wanted to get closer to the bird.
+The little girl and her mom watched the bird fly away. The little girl was so happy. She had a great time at the park. She couldn't wait to come back again.
+-------
+Generation time: 1.134 seconds
+Tokens generated: 201
+Tokens per second: 177.32
+MoE layer calls: 402
+Expert activations: 804
+Avg experts per MoE call: 2.00
+Routing time: 0.618% of total
+Expert compute time: 17.820% of total
+
+
+--- Test 3: "In the forest" ---
+Original:  In the forest, there was a big, hairy bear. He was very hungry and wanted to eat something. He saw a little rabbit and asked, "Can you help me find some food?"
+The rabbit said, "Sure, I can help you. Let's go to the river and look for some fish."
+They walked to the river and saw a fish swimming. The bear tried to catch the fish, but he couldn't. The rabbit said, "Don't worry, I have an idea. Let's use this stick to catch the fish."
+The bear and the rabbit worked together and caught the fish. The bear was very happy and said, "Thank you for helping me. You are a good friend."
+The rabbit smiled and said, "I'm happy to help. Let's go back to the forest and eat some berries."
+-------
+achieved tok/s: 193.82
+MoE:       In the forest, there was a big bear. The bear was very hungry. He wanted to find food. He saw a small rabbit. The bear said, "I am hungry. I want to eat you."
+The rabbit was scared. He said, "Please, do not eat me. I am too small. I will help you find food." The bear was surprised. He did not think a small rabbit could help him.
+The bear and the rabbit went to look for food. They found a big tree with lots of fruit. The bear was happy. He said, "Thank you, rabbit. You are a good friend." The bear ate the fruit and was not hungry anymore. The rabbit was happy too. They became best friends.
+-------
+Generation time: 0.968 seconds
+Tokens generated: 164
+Tokens per second: 169.44
+MoE layer calls: 328
+Expert activations: 656
+Avg experts per MoE call: 2.00
+Routing time: 1.653% of total
+Expert compute time: 19.011% of total
+
+
+--- Test 4: "Tim and Sam" ---
+Original:  Tim and Sam were brothers who liked to play with their toys. They had many toys, but their favorite was a big red car that could make noises and move by itself. They liked to pretend they were driving to different places and having adventures.
+One day, they decided to play with the car in the living room, where their mom was reading a book. They took the car and some other toys and put them on the floor. They made the car go vroom, beep, honk, and vroom, and had a lot of fun.
+But then, their mom came and saw the mess. She was not happy. She said, "Tim and Sam, what are you doing? You made a big mess with your toys. You have to clean it up now. And you have to put the toys back where they belong. The car is not yours. It belongs to your cousin Lily. She is coming to visit tomorrow. You have to be nice and share your toys with her. Do you understand?"
+Tim and Sam nodded. They felt sorry. They did not want to make their mom angry. They said, "Yes, mom. We understand. We are sorry. We will clean up our toys." They started to pick up the toys and put them back in the box. They worked together and soon the living room was clean.
+Their mom smiled. She said, "Thank you, Tim and Sam. You did a good job. You can play with the car again, but only if you ask Lily first. And you have to be careful with her toys. She is very small and fragile. She does not like loud noises. She likes quiet and calm. Do you understand?"
+Tim and Sam nodded. They said, "Yes, mom. We understand. We will ask Lily. We will be nice. We will be quiet. We will be quiet." They hugged their mom and then ran to the car. They took turns driving it around the living room. They made noises and had fun. They were happy.
+-------
+achieved tok/s: 183.93
+MoE:       Tim and Sam were brothers who liked to play with their toys. They had many toys, but their favorite was a big red car that could make noises and move by itself. They called it their "mine" because it was theirs and they did not want to share it with anyone else.
+One day, their mom told them to clean their room before dinner. She said they had to put away their toys and make their beds. Tim and Sam did not want to clean their room. They wanted to play with their car. They said to their mom, "No, we don't want to clean. We want to play with our car."
+Their mom was not happy. She said, "You have to clean your room. It is very messy and you have to be organized. If you don't clean your room, you can't play with your car." Tim and Sam did not listen. They said, "We don't care. We don't want to clean our room. We want to play with our car."
+Their mom was very angry. She said, "If you don't clean your room, you can't play with your car. You have to go to bed without dinner." Tim and Sam were very sad. They loved their car. They did not want to go to bed without dinner. They did not want to go to bed without dinner.
+They looked at each other. They had an idea. They said, "Let's hide our car under the bed. Then we can hide it and find it later." They thought that would be fun. They thought their mom would not find it. They thought they could hide it and find it later.
+They took their car and ran to their room. They put it under the bed and covered it with a blanket. They said, "Now we are ready for bed. We can come back and play with our car later." They smiled and hugged each other.
+But they did not know that their mom was watching them. She was very angry. She said, "What are you doing? You are very naughty. You did not listen to me. You did not clean your room. You lied to me. You hid your car under the bed. You lied to me. You are in big trouble."
+She took the car and the blanket and put them back in the closet. She said, "You can not play with your car until you clean your room. You have to learn to be organized and honest. You have to say sorry and do what I say. You have to go to bed without dinner. You have to go to bed without dessert. You have to go to bed without dessert."
+Tim and Sam were very sad. They cried and said, "We are sorry, mom. We are sorry, car. We are sorry, car. We will clean our room. We will go to bed. We will be organized. We will go to bed. We will go to bed without dessert. We will go to bed without dessert. We will go to bed without mom."
+Their mom said, "I hope you learned your lesson. I hope you will be good. I hope you will be good. I hope you will be good. I hope you will be good. I hope you will be good. I hope you will be good."
+The end.
+-------
+Generation time: 4.822 seconds
+Tokens generated: 715
+Tokens per second: 148.28
+MoE layer calls: 1430
+Expert activations: 2860
+Avg experts per MoE call: 2.00
+Routing time: 0.394% of total
+Expert compute time: 18.457% of total
+
+
+--- Test 5: "The magic" ---
+Original:  The magic was to arrive. It was a very special day. Everyone was excited.
+The magic was a big box. Inside the box was a surprise.
+The surprise was a big, fluffy puppy. The puppy was so cute!
+The puppy was very happy. He was so excited to be a puppy.
+The puppy was very obedient. He followed all the rules. He was a good puppy.
+The puppy was so happy. He was so obedient. He was the best puppy ever.
+-------
+achieved tok/s: 204.13
+MoE:       The magic was so powerful that it made the world around it sparkle. Everyone was so excited to see it.
+One day, a little girl named Lucy was walking in the park. She saw the magic and was amazed. She asked her mom, "What is that?"
+Her mom smiled and said, "That is a magic wand. It can make things disappear."
+Lucy was so excited. She wanted to try it out. She waved the wand and said, "Abracadabra!" Suddenly, the world around her started to disappear.
+Lucy was so happy. She waved the wand again and said, "Abracadabra!"
+The world was gone. Lucy was so excited. She had used the magic wand to make the world come back.
+-------
+Generation time: 0.989 seconds
+Tokens generated: 167
+Tokens per second: 168.90
+MoE layer calls: 334
+Expert activations: 668
+Avg experts per MoE call: 2.00
+Routing time: 0.101% of total
+Expert compute time: 15.879% of total
+
+
+ Temperature Effects Comparison
+========================================
+
+ Temperature: 0.0
+Original:  The dragon was very big and strong. He liked to fly high in the sky and breathe fire. He had a friend, a small bird, who lived in a tree near the dragon's cave. The bird was very small and quiet, but he was very smart and brave.
+One day, the dragon and the bird were playing hide and seek. The dragon counted to ten and then looked for the bird. He looked under the rocks, behind the flowers, and in the bushes. He could not find the bird anywhere. He was very sad and angry. He roared loudly and said, "Where are you, little bird? I give up!"
+The bird heard the dragon and felt sorry for him. He flew out of his hiding place and said, "I am here, big dragon! I am sorry I hid so well. I was scared of you. You are very big and strong, but you are also very mean. You scared me so much. You are not my friend anymore."
+The dragon was very surprised and hurt. He did not expect the bird to say that. He said, "I am sorry, little bird. I did not mean to scare you. I was just angry because you were small and quiet. You are very brave and smart. You are my friend. I do not want to lose you."
+The bird said, "I am sorry, big dragon. I did not mean to make you angry. I was just scared because you were big and loud. You are very big and loud. You are not my friend. You are mean and loud. I do not want to lose you. I want to be your friend."
+The dragon and the bird hugged and said sorry. They decided to play together again. They learned that size and loud are not everything. They learned that being kind and brave is more important. They learned that being friends is better than being enemies. They were happy and grateful. They flew high in the sky and looked for the dragon's cave. They found it and said, "We are friends. We are happy."
+-------
+achieved tok/s: 186.30
+MoE:       The dragon was very big and strong. He liked to fly high in the sky and breathe fire. He had a lot of friends, but his best friend was a little girl named Lily. Lily loved to play with the dragon and they would have so much fun together.
+One day, the dragon and Lily were playing hide and seek. The dragon was very good at hiding, but Lily couldn't find him. She looked and looked, but she couldn't see him anywhere. Finally, she heard a loud roar and saw the dragon flying towards her. She was so scared that she started to cry.
+The dragon saw that Lily was crying and he felt very sorry. He didn't want to scare her anymore. So, he flew down to Lily and gave her a big hug. Lily stopped crying and hugged the dragon back. From that day on, the dragon and Lily were the best of friends and they played together every day.
+-------
+Generation time: 1.335 seconds
+Tokens generated: 219
+Tokens per second: 164.09
+MoE layer calls: 438
+Expert activations: 876
+Avg experts per MoE call: 2.00
+Routing time: 0.375% of total
+Expert compute time: 19.181% of total
+
+
+  Temperature: 0.5
+Original:  The dragon was very big and strong. He had green scales and yellow wings. He liked to fly in the sky and breathe fire. One day, he saw a little girl playing in the park. She was very small and had a red dress. The dragon wanted to play with her, but he was too big and scared her. 
+The dragon thought of a plan. He flew down and landed on the girl's head. The girl was surprised and scared at first, but then she started to laugh. The dragon realized that the girl was not scared of him. She smiled and said, "You are a nice dragon." 
+The dragon was happy that the girl was not afraid of him. He wanted to be her friend, but he didn't know how to talk to her. So, he decided to use his fire breath to make a sound. The girl heard the sound and smiled even more. She said, "You can be my friend, Mr. Dragon." The dragon was happy and they played together for a long time.
+-------
+achieved tok/s: 188.03
+MoE:       The dragon was very big and strong. He liked to fly around the forest and play with the other animals. One day, the dragon was flying around when he saw a little bird. The bird was very scared and flew away quickly.
+The dragon wanted to make the bird happy, so he flew after the bird. But when he got close, the bird flew away again. The dragon was sad because he wanted to be friends with the bird. He decided to try again.
+He flew around the forest, but the bird was still scared. Finally, the dragon got tired and decided to surrender. He said to the bird, "I'm sorry I scared you. Let's be friends." The bird was happy and they became friends. From that day on, the dragon and the bird played together every day.
+-------
+Generation time: 1.150 seconds
+Tokens generated: 180
+Tokens per second: 156.49
+MoE layer calls: 360
+Expert activations: 720
+Avg experts per MoE call: 2.00
+Routing time: 1.217% of total
+Expert compute time: 18.606% of total
+
+
+  Temperature: 1.0
+Original:  The dragon was in his big castle on the top of a hill. He had a long sharp bookny and was very eager to write a story. He gentlely began to write his story but his eyes started to water. He couldn't believe his eyes when he read out loud. He had never paid for a real story before. The dragon listened carefully every word and soon realized he had to get a paper ignore. He raised his wings and started to call out his own story. His beautiful voice filled the sky and the dragon was filled with joy. He was very eager to show his story to everyone who passed by. He was so excited to finally be able to make a story. With much enthusiasm, he started writing in his new storybook. When his story was complete, he was so proud. He had scribble it all up and couldn't wait to share it with everyone. So he packed up his book, carefully folded the story, and trotted off to show his cavelight.
+-------
+achieved tok/s: 188.67
+MoE:       The dragon was very big and it was a naughty dragon. Everyone in the village was scared of him and always ran away. One day, a strong officer walked up to the dragon and said, "I don't want you to fight the evil operations!"
+But the dragon didn't listen to the officer. He refused to yield to the DNAelycing force and would not go away. The other villagers in the village were sad and ran away.
+So the dragon used his powerful wings and flew deep into the sky. When he was high up in the clouds, he started to breathe fire. Nothing changed him, only heat and flames. Even the angel had heard the dragon's words and knew something was wrong.
+At that moment, the cold dragon flew over the hands of the setting fire. Everyone there was worried and all started to run. The emptied the dragon'svenirer, chased the evil GUIats and tossed everything, which was to end.
+The evil prepared evil injuries were too much for the dragon to launch. Both he and the village were buried in ruins and it was all because of the dragon. He's been there ever since, one cold winter, thanks to the stubborn dragon with its big wings.
+-------
+Generation time: 1.823 seconds
+Tokens generated: 284
+Tokens per second: 155.80
+MoE layer calls: 568
+Expert activations: 1136
+Avg experts per MoE call: 2.00
+Routing time: 0.549% of total
+Expert compute time: 22.822% of total
+
+
+ Expert Usage Analysis
+========================================
+Analyzing expert usage patterns...
+
+Prompt: "The princess"
+ The princess was very excited. She was going to get to the top of the castle. She
+-------
+Generation time: 0.127 seconds
+Tokens generated: 20
+Tokens per second: 157.97
+MoE layer calls: 40
+Expert activations: 80
+Avg experts per MoE call: 2.00
+Routing time: 0.000% of total
+Expert compute time: 26.855% of total
+
+--- Expert Usage Statistics ---
+Layer 2:
+  Total expert activations: 40
+    Expert  1:   14 activations (35.0%)
+    Expert  2:   11 activations (27.5%)
+    Expert  3:    8 activations (20.0%)
+    Expert  4:    7 activations (17.5%)
+  Load balance score: 0.600 (1.0 = perfect)
+
+Layer 4:
+  Total expert activations: 40
+    Expert  1:   14 activations (35.0%)
+    Expert  2:   11 activations (27.5%)
+    Expert  3:    8 activations (20.0%)
+    Expert  4:    7 activations (17.5%)
+  Load balance score: 0.600 (1.0 = perfect)
+
+
+--- Routing Entropy Analysis ---
+Mean entropy: 1.133
+Std entropy: 0.200
+Min entropy: 0.600
+Max entropy: 1.361
+Recent entropy values:
+  Pos  21: 0.602
+  Pos  22: 1.179
+  Pos  23: 0.964
+  Pos  24: 1.175
+  Pos  25: 1.099
+  Pos  26: 1.107
+  Pos  27: 1.173
+  Pos  28: 0.754
+  Pos  29: 1.299
+  Pos  30: 1.310
+  Pos  31: 1.339
+  Pos  32: 1.028
+  Pos  33: 1.053
+  Pos  34: 1.013
+  Pos  35: 1.178
+  Pos  36: 1.146
+  Pos  37: 1.348
+  Pos  38: 1.124
+  Pos  39: 1.344
+  Pos  40: 1.082
+
+Prompt: "The monster"
+ The monster was very big and scary. He liked to hide in the tallest trees and
+-------
+Generation time: 0.147 seconds
+Tokens generated: 20
+Tokens per second: 135.62
+MoE layer calls: 40
+Expert activations: 80
+Avg experts per MoE call: 2.00
+Routing time: 0.000% of total
+Expert compute time: 14.240% of total
+
+--- Expert Usage Statistics ---
+Layer 2:
+  Total expert activations: 40
+    Expert  1:   13 activations (32.5%)
+    Expert  2:    8 activations (20.0%)
+    Expert  3:    7 activations (17.5%)
+    Expert  4:   12 activations (30.0%)
+  Load balance score: 0.700 (1.0 = perfect)
+
+Layer 4:
+  Total expert activations: 40
+    Expert  1:   13 activations (32.5%)
+    Expert  2:    8 activations (20.0%)
+    Expert  3:    7 activations (17.5%)
+    Expert  4:   12 activations (30.0%)
+  Load balance score: 0.700 (1.0 = perfect)
+
+
+--- Routing Entropy Analysis ---
+Mean entropy: 1.159
+Std entropy: 0.186
+Min entropy: 0.700
+Max entropy: 1.369
+Recent entropy values:
+  Pos  21: 1.235
+  Pos  22: 0.947
+  Pos  23: 1.316
+  Pos  24: 0.964
+  Pos  25: 1.239
+  Pos  26: 1.241
+  Pos  27: 1.369
+  Pos  28: 0.700
+  Pos  29: 1.239
+  Pos  30: 0.925
+  Pos  31: 1.334
+  Pos  32: 0.989
+  Pos  33: 1.312
+  Pos  34: 0.894
+  Pos  35: 1.019
+  Pos  36: 1.349
+  Pos  37: 1.297
+  Pos  38: 1.323
+  Pos  39: 0.798
+  Pos  40: 1.134
+
+Prompt: "The castle"
+ The castle was very big and strong. It was made of strong walls and had a big gate.
+-------
+Generation time: 0.119 seconds
+Tokens generated: 20
+Tokens per second: 167.48
+MoE layer calls: 40
+Expert activations: 80
+Avg experts per MoE call: 2.00
+Routing time: 0.000% of total
+Expert compute time: 30.983% of total
+
+--- Expert Usage Statistics ---
+Layer 2:
+  Total expert activations: 40
+    Expert  1:   12 activations (30.0%)
+    Expert  2:   12 activations (30.0%)
+    Expert  3:   13 activations (32.5%)
+    Expert  4:    3 activations (7.5%)
+  Load balance score: 0.300 (1.0 = perfect)
+
+Layer 4:
+  Total expert activations: 40
+    Expert  1:   12 activations (30.0%)
+    Expert  2:   12 activations (30.0%)
+    Expert  3:   13 activations (32.5%)
+    Expert  4:    3 activations (7.5%)
+  Load balance score: 0.300 (1.0 = perfect)
+
+
+--- Routing Entropy Analysis ---
+Mean entropy: 1.146
+Std entropy: 0.207
+Min entropy: 0.567
+Max entropy: 1.366
+Recent entropy values:
+  Pos  21: 1.216
+  Pos  22: 1.173
+  Pos  23: 1.051
+  Pos  24: 0.567
+  Pos  25: 1.349
+  Pos  26: 0.989
+  Pos  27: 1.140
+  Pos  28: 1.245
+  Pos  29: 1.094
+  Pos  30: 1.113
+  Pos  31: 1.237
+  Pos  32: 1.036
+  Pos  33: 1.244
+  Pos  34: 1.210
+  Pos  35: 1.366
+  Pos  36: 0.748
+  Pos  37: 1.355
+  Pos  38: 1.030
+  Pos  39: 1.313
+  Pos  40: 1.303
+
+Prompt: "The forest"
+ The forest was very quiet. Every day, the animals would go there to play and have fun.
+-------
+Generation time: 0.145 seconds
+Tokens generated: 20
+Tokens per second: 137.74
+MoE layer calls: 40
+Expert activations: 80
+Avg experts per MoE call: 2.00
+Routing time: 0.000% of total
+Expert compute time: 9.642% of total
+
+--- Expert Usage Statistics ---
+Layer 2:
+  Total expert activations: 40
+    Expert  1:   12 activations (30.0%)
+    Expert  2:   13 activations (32.5%)
+    Expert  3:    6 activations (15.0%)
+    Expert  4:    9 activations (22.5%)
+  Load balance score: 0.600 (1.0 = perfect)
+
+Layer 4:
+  Total expert activations: 40
+    Expert  1:   12 activations (30.0%)
+    Expert  2:   13 activations (32.5%)
+    Expert  3:    6 activations (15.0%)
+    Expert  4:    9 activations (22.5%)
+  Load balance score: 0.600 (1.0 = perfect)
+
+
+--- Routing Entropy Analysis ---
+Mean entropy: 1.159
+Std entropy: 0.215
+Min entropy: 0.371
+Max entropy: 1.381
+Recent entropy values:
+  Pos  21: 1.224
+  Pos  22: 1.348
+  Pos  23: 1.319
+  Pos  24: 1.362
+  Pos  25: 1.060
+  Pos  26: 1.222
+  Pos  27: 1.270
+  Pos  28: 1.211
+  Pos  29: 1.169
+  Pos  30: 1.302
+  Pos  31: 1.282
+  Pos  32: 0.888
+  Pos  33: 1.342
+  Pos  34: 0.828
+  Pos  35: 0.979
+  Pos  36: 1.229
+  Pos  37: 1.200
+  Pos  38: 1.082
+  Pos  39: 1.378
+  Pos  40: 0.929
+
+Prompt: "The magic spell"
+ The magic spell was so powerful that it made the sky sparkle. Everyone wanted to know how
+-------
+Generation time: 0.123 seconds
+Tokens generated: 20
+Tokens per second: 162.52
+MoE layer calls: 40
+Expert activations: 80
+Avg experts per MoE call: 2.00
+Routing time: 0.000% of total
+Expert compute time: 43.067% of total
+
+--- Expert Usage Statistics ---
+Layer 2:
+  Total expert activations: 40
+    Expert  1:   14 activations (35.0%)
+    Expert  2:    9 activations (22.5%)
+    Expert  3:   10 activations (25.0%)
+    Expert  4:    7 activations (17.5%)
+  Load balance score: 0.600 (1.0 = perfect)
+
+Layer 4:
+  Total expert activations: 40
+    Expert  1:   14 activations (35.0%)
+    Expert  2:    9 activations (22.5%)
+    Expert  3:   10 activations (25.0%)
+    Expert  4:    7 activations (17.5%)
+  Load balance score: 0.600 (1.0 = perfect)
+
+
+--- Routing Entropy Analysis ---
+Mean entropy: 1.143
+Std entropy: 0.217
+Min entropy: 0.402
+Max entropy: 1.373
+Recent entropy values:
+  Pos  21: 1.202
+  Pos  22: 1.205
+  Pos  23: 1.300
+  Pos  24: 1.273
+  Pos  25: 1.046
+  Pos  26: 0.766
+  Pos  27: 1.310
+  Pos  28: 0.402
+  Pos  29: 1.283
+  Pos  30: 1.293
+  Pos  31: 1.373
+  Pos  32: 0.449
+  Pos  33: 1.338
+  Pos  34: 1.183
+  Pos  35: 1.343
+  Pos  36: 1.239
+  Pos  37: 1.280
+  Pos  38: 1.215
+  Pos  39: 0.945
+  Pos  40: 1.051
+
