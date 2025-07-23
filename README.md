@@ -1,46 +1,242 @@
-# MoE (Mixture of Experts) Integration for Julia Transformers
+# MixtureOfExperts.jl
 
-PLEASE NOTE SOME INFORMATION IS OUTDATED IN THE README!
+A comprehensive Julia library for Mixture of Experts (MoE) architectures with seamless integration to existing models, particularly Llama2.jl. This library implements state-of-the-art MoE techniques from recent research including Switch Transformer, DeepSeek V3, and Stanford CS336 methodologies.
 
+## Features
 
-this implementation:
+- **Multiple Gating Mechanisms**: TopK, Switch, Expert Choice, Soft MoE, Hash routing
+- **Expert Architectures**: Standard FFN, Gated FFN (Llama-style), CUR compressed experts  
+- **Load Balancing**: Switch Transformer loss, DeepSeek variants, auxiliary-free balancing
+- **Llama2 Integration**: Convert existing Llama2 models to MoE with preserved functionality
+- **Advanced Features**: Shared experts, expert virtualization, routing analysis
 
-1. **Locates the dense neural network layers** in Llama2.jl and Transformers.jl 
-2. **Replaces dense FFN layers with MoE layers** containing multiple smaller experts
-3. **Starts simple** with random expert selection, then advances to sophisticated gating
-4. **Implements Stanford CS336 equations** for Top-K routing and load balancing
-5. **Provides complete integration** with existing Julia transformer libraries
-6. **Prepares foundation** for future Dagger.jl dynamic scheduling integration
+## Quick Start
 
-##  Architecture Overview
+### Basic MoE Layer
 
-### Standard Dense FFN (What We Replace)
 ```julia
-# Llama FFN: O(hidden_dim × input_dim) parameters
-h1 = silu(W1 * x)     # Gate projection
-h2 = W3 * x           # Up projection  
-h = h1 .* h2          # Element-wise multiplication
-output = W2 * h       # Down projection
+using MixtureOfExperts
+
+config = create_moe_config(
+    num_experts=8,
+    expert_type=:gated,
+    input_dim=512,
+    hidden_dim=2048,
+    output_dim=512,
+    top_k=2,
+    gate_type=TopKGating(2),
+    balance_loss=SwitchTransformerLoss(0.01f0)
+)
+
+moe_layer = MoELayer(config)
+
+input = randn(Float32, 512, 32)
+output, balance_loss = moe_layer(input; training=true)
 ```
 
-### MoE Replacement
+### Llama2 Model Conversion
+
 ```julia
-# MoE: Multiple smaller experts, only top-k active
-router_logits = W_router * x
-expert_indices, gates = TopK(softmax(router_logits), k=2)
-output = Σ(gates[i] * Expert[i](x) for i in expert_indices)
+using Llama2
+using MixtureOfExperts
+
+original_model = Llama2.load_karpathy_model("stories42M.bin", "tokenizer.bin")
+
+moe_model = convert_to_moe(
+    original_model,
+    [2, 4, 6];
+    num_experts=8,
+    top_k=2,
+    expert_init_strategy=:perturb,
+    expert_init_noise=0.01f0,
+    gate_type=TopKGating(2),
+    balance_loss=SwitchTransformerLoss(0.01f0),
+    expert_type=:gated
+)
+
+println("Original parameters: $(count_llama_parameters(original_model))")
+println("MoE total parameters: $(count_parameters(moe_model))")
+println("MoE active parameters: $(count_active_parameters(moe_model))")
 ```
 
-##  Project Structure
+### Text Generation with MoE
+
+```julia
+prompt = "Once upon a time"
+
+original_output = Llama2.sample(original_model, prompt; temperature=0.9f0)
+
+moe_output = sample_moe(moe_model, prompt; 
+                       temperature=0.9f0,
+                       show_expert_stats=true,
+                       show_routing_entropy=true)
+```
+
+### Expert Usage Analysis
+
+```julia
+test_prompts = [
+    "The dragon flew",
+    "In the forest", 
+    "The magic spell",
+    "Once upon a time"
+]
+
+for prompt in test_prompts
+    println("Prompt: \"$prompt\"")
+    
+    result = sample_moe(moe_model, prompt;
+                       temperature=0.3f0,
+                       max_seq_len=50,
+                       show_expert_stats=true,
+                       expert_usage_threshold=0.05f0)
+    
+    println("Generated: \"$result\"\n")
+end
+```
+
+## Core API Reference
+
+### Model Conversion
+
+#### `convert_to_moe(model, moe_layers; kwargs...)`
+
+Convert existing Llama2 model to MoE by replacing specified layers.
+
+**Arguments:**
+- `model::Llama2.LanguageModel`: Original model to convert
+- `moe_layers::Vector{Int}`: Layer indices to convert to MoE (1-based)
+
+**Key Options:**
+- `num_experts::Int=8`: Number of experts per MoE layer
+- `top_k::Int=2`: Number of experts to activate per token
+- `expert_init_strategy::Symbol=:perturb`: Weight initialization (`:copy`, `:perturb`, `:split`, `:random`)
+- `expert_type::Symbol=:gated`: Expert architecture (`:standard`, `:gated`, `:cur`)
+- `gate_type::GatingMechanism=TopKGating(top_k)`: Routing mechanism
+- `balance_loss::LoadBalancingLoss=SwitchTransformerLoss(0.01f0)`: Load balancing
+
+**Returns:** `MoELanguageModel`
+
+### Text Generation
+
+#### `sample_moe(model, prompt; kwargs...)`
+
+Generate text using MoE model with expert tracking.
+
+**Arguments:**
+- `model::MoELanguageModel`: MoE model for generation
+- `prompt::String=""`: Input text prompt
+
+**Key Options:**
+- `temperature::Float32=0.9f0`: Sampling temperature
+- `max_seq_len::Int=typemax(Int)`: Maximum sequence length
+- `show_expert_stats::Bool=false`: Display expert usage statistics
+- `show_routing_entropy::Bool=false`: Show routing entropy analysis
+- `expert_usage_threshold::Float32=0.01f0`: Threshold for reporting expert usage
+
+**Returns:** `String` (generated text)
+
+### Model Analysis
+
+#### `count_parameters(model::MoELanguageModel)`
+Count total parameters in MoE model.
+
+#### `count_active_parameters(model::MoELanguageModel)`  
+Count parameters active during inference (considering top-k routing).
+
+#### `get_expert_stats(model, tokens)`
+Analyze expert usage patterns for given token sequence.
+
+### Configuration
+
+#### `create_moe_config(; kwargs...)`
+
+Create MoE layer configuration with sensible defaults.
+
+**Key Options:**
+- `num_experts::Int=8`: Number of experts
+- `expert_type::Symbol=:standard`: Expert architecture
+- `top_k::Int=2`: Experts to activate
+- `gate_type::GatingMechanism=TopKGating(2)`: Routing mechanism
+- `balance_loss::LoadBalancingLoss=SwitchTransformerLoss(0.01f0)`: Load balancing
+
+## Gating Mechanisms
+
+### TopKGating
+Stanford CS336 implementation with softmax renormalization:
+```julia
+gate = TopKGating(k=2)
+```
+
+### SwitchGating  
+Switch Transformer (k=1 special case):
+```julia
+gate = SwitchGating()
+```
+
+### ExpertChoiceGating
+Experts select tokens instead of tokens selecting experts:
+```julia
+gate = ExpertChoiceGating(capacity_factor=1.25f0)
+```
+
+### Advanced Routing
+```julia
+gate = SoftMoEGating(k=2, λ=1.0f0)
+gate = HashGating(k=2, num_experts=8)
+gate = SharedExpertGating(num_shared=2, base_gate=TopKGating(2))
+```
+
+## Expert Types
+
+### StandardExpert
+Basic 2-layer FFN with configurable activation:
+```julia
+expert = StandardExpert(input_dim, hidden_dim, output_dim, gelu; dropout=0.1f0)
+```
+
+### GatedExpert  
+Llama-style gated FFN: `w2(silu(w1(x)) * w3(x))`:
+```julia
+expert = GatedExpert(input_dim, hidden_dim, output_dim, silu)
+```
+
+### CURExpert
+Compressed expert using CUR decomposition:
+```julia
+expert = CURExpert(input_dim, hidden_dim, output_dim, gelu; rank=64)
+```
+
+## Load Balancing
+
+### SwitchTransformerLoss
+Original Switch Transformer auxiliary loss:
+```julia
+loss = SwitchTransformerLoss(α=0.01f0)
+```
+
+### DeepSeekLoss
+DeepSeek V1/V2 variants with device-aware balancing:
+```julia
+loss = DeepSeekLoss(α=0.01f0, balance_type=:device)
+```
+
+### AuxiliaryFreeLoss
+DeepSeek V3 innovation with online bias learning:
+```julia
+loss = AuxiliaryFreeLoss(num_experts=8, learning_rate=0.01f0)
+```
+
+## File Structure
 
 ```
 src/
 ├── MixtureOfExperts.jl          # Main module
 ├── gating/                      # Routing mechanisms
-│   ├── base.jl                  # Abstract types
-│   ├── simple.jl                # RandomGating (starting point)
+│   ├── base.jl                  # Abstract types and interfaces
+│   ├── simple.jl                # RandomGating (testing/baseline)
 │   ├── topk.jl                  # TopKGating (Stanford CS336)
-│   ├── switch.jl                # SwitchGating
+│   ├── switch.jl                # SwitchGating, JitterGating
 │   ├── expert_choice.jl         # ExpertChoiceGating
 │   └── advanced.jl              # SoftMoE, HashGating, SharedExpert
 ├── experts/                     # Expert architectures
@@ -50,242 +246,96 @@ src/
 ├── balancing/                   # Load balancing losses
 │   ├── losses.jl                # Switch, DeepSeek, Z-loss
 │   └── auxiliary_free.jl        # DeepSeek V3 innovation
-├── core/                        # Core components
+├── core/                        # Core MoE components
 │   ├── router.jl                # Neural routing network
-│   ├── moe_layer.jl             # Main MoE layer
+│   ├── moe_layer.jl             # Main MoE layer implementation
 │   └── utils.jl                 # Utility functions
-└── integrations/                # Library integrations
-    ├── llama2_moe_integration.jl      # Llama2.jl integration
-    └── transformers_moe_integration.jl # Transformers.jl integration
+└── llama2/                      # Llama2.jl integration
+    ├── types.jl                 # MoE wrapper types
+    ├── conversion.jl            # convert_to_moe functionality
+    ├── inference.jl             # MoE transformer forward pass
+    ├── attention.jl             # Attention with RoPE support
+    ├── generation.jl            # sample_moe and text generation
+    └── utils.jl                 # Save/load, analysis utilities
 ```
 
-##  Quick Start
+## Advanced Usage
 
-### 1. Basic MoE Layer (Random Gating)
-
-
-```julia
-using MixtureOfExperts
-
-# Create simple MoE config
-config = MoEConfig(
-    num_experts = 8,
-    expert_type = :standard,
-    input_dim = 512,
-    hidden_dim = 256,  # 2048 ÷ 8 experts
-    output_dim = 512,
-    gate_type = RandomGating(2),    # Random top-2 selection
-    balance_loss = NoBalancingLoss()  # No balancing initially
-)
-
-# Create MoE layer
-moe = MoELayer(config)
-
-# Use it
-x = randn(Float32, 512, 32)  # (features, batch)
-output, loss = moe(x; training=true)
-```
-
-### 2. Advanced MoE (Top-K Gating)
-
-Following Stanford CS336 methodology:
+### Custom Gating Mechanism
 
 ```julia
-# Stanford CS336 Top-K with Switch Transformer loss
-advanced_config = MoEConfig(
-    num_experts = 8,
-    expert_type = :gated,           # Llama-style experts
-    input_dim = 512,
-    hidden_dim = 256,
-    output_dim = 512,
-    gate_type = TopKGating(2),      # Top-2 routing
-    balance_loss = SwitchTransformerLoss(0.01f0),  # α=0.01
-    use_fp32_router = true,         # Numerical stability
-    noise_scale = 0.01f0           # Training noise
-)
+struct MyGating <: GatingMechanism
+    k::Int
+    temperature::Float32
+end
 
-moe = MoELayer(advanced_config)
-```
-
-### 3. Replaced FFN in Existing Models
-
-#### Llama2.jl Integration
-
-```julia
-# In transformer forward pass, replace:
-# matmul!(s.hb, w.w1, s.xb)
-# matmul!(s.hb2, w.w3, s.xb) 
-# s.hb .*= s.hb2
-# matmul!(s.xb, w.w2, s.hb)
-
-# With:
-input_matrix = reshape(s.xb, :, 1)
-moe_output, moe_loss = moe_layer(input_matrix; training=training)
-s.xb = vec(moe_output)
-```
-
-#### Transformers.jl Integration
-
-```julia
-# Replace standard FFN block:
-# Layers.Chain(LLamaGated(...), Layers.Dense(...))
-
-# With MoE block:
-moe_block = LlamaMoEBlock(moe_config)
-```
-
-##  Implemented Gating Mechanisms
-
-### 1. RandomGating
-- **Use case**: Initial testing, baseline
-- **Selection**: Random expert choice
-- **Benefits**: Simple, no routing collapse
-
-### 2. TopKGating (Stanford CS336)
-```julia
-# Mathematical formulation:
-# g_{i,t} = s_{i,t} if s_{i,t} ∈ TopK({s_{j,t}}, K) else 0
-# s_{i,t} = Softmax_i(router_logits)
-```
-
-### 3. SwitchGating  
-- **Use case**: Switch Transformer (k=1)
-- **Selection**: Single expert per token
-
-### 4. ExpertChoiceGating
-- **Use case**: Expert choice routing
-- **Selection**: Experts choose tokens
-
-### 5. SoftMoEGating
-- **Use case**: Differentiable routing
-- **Selection**: Weighted combination of all experts
-
-## Load Balancing Strategies
-
-### Switch Transformer Loss (Stanford CS336)
-```julia
-# loss = α · N · Σ(f_i · P_i)
-# f_i = fraction of tokens to expert i  
-# P_i = average probability for expert i
-SwitchTransformerLoss(0.01f0)
-```
-
-### DeepSeek Variations
-```julia
-# Expert-level balancing
-DeepSeekLoss(0.01f0, :expert)
-
-# Device-level balancing  
-DeepSeekLoss(0.01f0, :device)
-
-# Communication balancing
-DeepSeekLoss(0.01f0, :communication)
-```
-
-### DeepSeek V3 Innovation
-```julia
-# Auxiliary-free balancing with learned bias
-AuxiliaryFreeLoss(num_experts; learning_rate=0.01f0)
-```
-
-### Z-Loss (Numerical Stability)
-```julia
-# Prevents logit explosion: L_z = (1/B)Σ(log Σe^x)²
-ZLoss(0.001f0)
-```
-
-##  Expert Architectures
-
-### 1. StandardExpert
-- **Architecture**: 2-layer MLP with activation
-- **Use case**: Basic experiments
-
-### 2. GatedExpert (Llama-style)
-```julia
-# FFN(x) = W2(SiLU(W1(x)) ⊙ W3(x))
-gate = silu(W1(x))
-up = W3(x)  
-output = W2(gate .* up)
-```
-
-### 3. CURExpert (Research Innovation)
-- **Architecture**: CUR matrix decomposition for compression
-- **Benefits**: Parameter reduction while maintaining performance
-
-## Testing and Validation
-
-run the test_demo.jl file
-
-....in progress
-
-##  Performance Analysis
-
-Typical results (8 experts, top-2 routing):
-
-- **Parameter Reduction**: ~60-75% fewer parameters than dense equivalent
-- **Computational Cost**: ~2-3x fewer FLOPs per token (only top-k experts active)
-- **Memory Efficiency**: Significant reduction in memory usage
-- **Training Speed**: 2-7x faster training (research literature)
-
-##  Research Implementation
-
-This implementation includes cutting-edge research from:
-
-- **Stanford CS336**: Top-K routing, Switch Transformer loss
-- **DeepSeek V1/V2/V3**: Device balancing, auxiliary-free routing
-- **Mixtral/DBRX**: Softmax renormalization after TopK
-- **Switch Transformer**: Load balancing, capacity constraints
-- **Expert Choice**: Expert-selects-token routing
-
-##  Configuration Options
-
-Complete configuration example:
-
-```julia
-config = MoEConfig(
-    # Expert configuration
-    num_experts = 8,
-    expert_type = :gated,              # :standard, :gated, :cur
-    input_dim = 768,
-    hidden_dim = 3072,
-    output_dim = 768,
-    activation = gelu,
-    expert_dropout = 0.1f0,
+function compute_gates(gate::MyGating, router_logits::AbstractMatrix)
+    scaled_logits = router_logits ./ gate.temperature
+    router_probs = softmax(scaled_logits; dims=1)
     
-    # Gating configuration
-    gate_type = TopKGating(2),         # Routing mechanism
-    top_k = 2,
-    noise_scale = 0.01f0,              # Training noise
-    use_noise_network = false,         # Learned noise (Shazeer)
-    use_fp32_router = true,            # Numerical stability
+    expert_indices = zeros(Int, gate.k, size(router_logits, 2))
+    expert_gates = zeros(Float32, gate.k, size(router_logits, 2))
     
-    # Load balancing
-    balance_loss = SwitchTransformerLoss(0.01f0),
-    z_loss_weight = 0.001f0,
+    for i in 1:size(router_logits, 2)
+        topk_indices = partialsortperm(router_probs[:, i], 1:gate.k, rev=true)
+        expert_indices[:, i] = topk_indices
+        expert_gates[:, i] = router_probs[topk_indices, i] ./ sum(router_probs[topk_indices, i])
+    end
     
-    # Capacity and efficiency  
-    capacity_factor = 1.25f0,          # Token capacity per expert
-    drop_tokens = false,               # Drop overflow tokens
-    
-    # Advanced features
-    use_cur = false,                   # CUR decomposition
-    cur_rank = nothing,                # CUR rank
-    num_shared_experts = 0             # DeepSeek-style shared experts
-)
+    return expert_indices, expert_gates, router_probs
+end
 ```
 
-##  References
+### Batch Generation
 
-- [Stanford CS336 Lecture 4: Mixture of Experts](https://web.stanford.edu/class/cs336/)
-- [Switch Transformer: Scaling to Trillion Parameter Models](https://arxiv.org/abs/2101.03961)
-- [DeepSeek-V2: A Strong, Economical, and Efficient Mixture-of-Experts Language Model](https://arxiv.org/abs/2405.04434)
-- [Mixtral of Experts](https://arxiv.org/abs/2401.04088)
+```julia
+prompts = [
+    "The dragon",
+    "In the castle", 
+    "Magic spell",
+    "Forest adventure"
+]
 
+results = sample_moe_batch(moe_model, prompts;
+                          temperature=0.7f0,
+                          max_seq_len=100,
+                          show_progress=true)
 
-##  License
+for (prompt, result) in zip(prompts, results)
+    println("\"$prompt\" → \"$result\"")
+end
+```
 
-MIT License - Feel free to use in your research and projects.
+### Model Saving and Loading
 
----
+```julia
+save_moe_model(moe_model, "my_moe_model.jls")
 
-*note: This implementation provides a complete but basic/rough foundation for MoE in Julia transformers, ready for integration with existing codebases and future enhancement with dynamic scheduling capabilities.* 
+loaded_model = load_moe_model("my_moe_model.jls")
+
+metadata = model_info(loaded_model)
+println("Model info: $metadata")
+```
+
+### Comparative Analysis
+
+```julia
+comparison = compare_models(original_model, moe_model, "The brave knight")
+
+for (i, comp) in enumerate(comparison["comparisons"])
+    println("Run $i:")
+    println("  Original: $(comp["original_output"])")
+    println("  MoE:      $(comp["moe_output"])")
+    println()
+end
+```
+
+## Research Implementation Notes
+
+This library implements techniques from:
+
+- **Switch Transformer** (Fedus et al., 2022): Core MoE architecture and load balancing
+- **DeepSeek V1-V3** (2024): Shared experts, auxiliary-free balancing, advanced routing
+- **Stanford CS336** (2024): Mathematical formulations and routing algorithms
+- **Expert Choice Routing** (Zhou et al., 2022): Alternative routing paradigm
+- **CUR Decomposition**: Memory-efficient expert compression
