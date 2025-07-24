@@ -395,6 +395,7 @@ function test_cur_in_moe_context(moe_layer_original::MoELayer, moe_layer_with_cu
     )
 end
 
+##DO NOT USE function generate_realistic_test_inputs(input_dim::Int, batch_size::Int = 32; , AS WE WANT TO TEST ON REAL DATA NOT FAKE!!! AND DONT USE ANY OTHER FAKE GENERATION FUNCTIONS!!! WE WANT REALISTIC TESTING AS MUCH AS POSSIBLE!!!!!!
 """
     generate_realistic_test_inputs(input_dim::Int, batch_size::Int = 32; 
                                   scale::Float32 = 1.0f0)
