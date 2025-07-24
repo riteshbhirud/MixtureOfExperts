@@ -39,6 +39,8 @@ export compute_gates, compute_loss
 export load_balance_score
 export reset_stats!
 
+export cur_decompose, compute_leverage_scores, compute_row_leverage_scores, sample_by_scores, initialize_cur_directly, suggest_rank, convert_dense_to_cur, CURExpert, cur_matmul, GatedCURExpert, convert_expert_to_cur, compression_ratio, test_cur_expert_approximation, test_cur_in_moe_context, generate_realistic_test_inputs, select_cur_rank, validate_cur_decomposition, validate_cur_expert
+
 const LLAMA2_AVAILABLE = try
     import Llama2
     true
