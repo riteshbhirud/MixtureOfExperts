@@ -138,9 +138,11 @@ function create_gpu_moe(;
         :balance_alpha => balance_alpha
     )
     
+    # Fixed version detection
     conversion_metadata = Dict{Symbol, Any}(
         :creation_time => time(),
-        :cuda_version => CUDA.version(),
+        :cuda_runtime_version => CUDA.runtime_version(),
+        :cuda_driver_version => CUDA.driver_version(),
         :device_name => CUDA.name(CUDA.device()),
         :library_version => "1.0.0"
     )

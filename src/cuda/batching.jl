@@ -340,7 +340,7 @@ function cleanup_pools!(pool::GPUMemoryPool{T}) where T<:AbstractFloat
 end
 
 # Batch workspace management for MoE operations
-struct GPUBatchWorkspace{T<:AbstractFloat}
+mutable struct GPUBatchWorkspace{T<:AbstractFloat}
     # Input/output buffers
     batch_input::CuMatrix{T}              # input_dim × max_batch_size
     batch_output::CuMatrix{T}             # output_dim × max_batch_size
@@ -416,8 +416,7 @@ struct GPUBatchWorkspace{T<:AbstractFloat}
         # Allocate index buffers
         index_buffers = CuMatrix{Int32}[]
         push!(index_buffers, CUDA.zeros(Int32, num_experts, max_batch_size))  # Expert assignments
-        push!(index_buffers, CUDA.zeros(Int32, top_k * max_batch_size))       # Sorted indices
-        
+        push!(index_buffers, CUDA.zeros(Int32, top_k, max_batch_size))        
         # Calculate total workspace size
         total_bytes = (
             sizeof(batch_input) + sizeof(batch_output) +
