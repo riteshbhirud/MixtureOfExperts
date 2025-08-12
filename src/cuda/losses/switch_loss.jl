@@ -451,7 +451,7 @@ function get_loss_performance_stats(loss::GPUSwitchTransformerLoss{T}) where T
     return stats
 end
 
-function reset_loss_performance_stats!(loss::GPUSwitchTransformerLoss)
+function reset_loss_performance_stats!(loss::GPUSwitchTransformerLoss{T}) where T<:AbstractFloat
     loss.forward_calls[] = 0
     loss.total_forward_time[] = 0.0
     loss.expert_fraction_time[] = 0.0
@@ -571,6 +571,12 @@ mutable struct AdaptiveLossScaling{T<:AbstractFloat}
             adaptation_window, Ref(0)
         )
     end
+
+
+    # Convenience constructor that infers type
+function AdaptiveLossScaling(base_loss::GPUSwitchTransformerLoss{T}; kwargs...) where T<:AbstractFloat
+    return AdaptiveLossScaling{T}(base_loss; kwargs...)
+end
 end
 
 function adaptive_loss_forward!(

@@ -290,31 +290,30 @@ function gpu_reduce_loss_terms_kernel!(
 end
 
 # Load balancing score computation kernel
+# Fixed GPU-compatible version of the load balance score kernel
 function gpu_load_balance_score_kernel!(
-    balance_scores::CuDeviceVector{T},      # 1 element
-    expert_assignments::CuDeviceMatrix{Int32}, # top_k × batch_size
-    num_experts::Int,
-    top_k::Int,
-    batch_size::Int
-) where T<:AbstractFloat
+    balance_scores::CuDeviceVector{Float32},
+    expert_assignments::CuDeviceMatrix{Int32},
+    num_experts::Int64,
+    top_k::Int64,
+    batch_size::Int64
+)
     
     # Use first thread to compute the score
     if blockIdx().x == 1 && threadIdx().x == 1
         
-        # Count assignments per expert
-        local assignment_counts = MVector{256, Int32}(undef)  # Assuming max 256 experts
+        # Use a simple approach without dynamic arrays
+        # Since we can't use MVector in GPU kernels, we'll compute directly
         
-        for i in 1:min(num_experts, 256)
-            assignment_counts[i] = 0
-        end
-        
-        # Count actual assignments
+        # Count actual assignments per expert (up to 256 experts)
         total_assignments = 0
+        sum_squared_deviations = Float32(0)
+        
+        # First pass: count total assignments
         for batch_idx in 1:batch_size
             for k in 1:top_k
                 expert_id = expert_assignments[k, batch_idx]
-                if expert_id >= 1 && expert_id <= min(num_experts, 256)
-                    assignment_counts[expert_id] += 1
+                if expert_id >= 1 && expert_id <= num_experts
                     total_assignments += 1
                 end
             end
@@ -322,30 +321,43 @@ function gpu_load_balance_score_kernel!(
         
         if total_assignments > 0
             # Compute ideal assignment count
-            ideal_count = T(total_assignments) / T(num_experts)
+            ideal_count = Float32(total_assignments) / Float32(num_experts)
+            
+            # Second pass: compute variance by counting each expert's assignments
+            for expert_idx in 1:num_experts
+                expert_count = 0
+                
+                # Count assignments for this specific expert
+                for batch_idx in 1:batch_size
+                    for k in 1:top_k
+                        expert_id = expert_assignments[k, batch_idx]
+                        if expert_id == expert_idx
+                            expert_count += 1
+                        end
+                    end
+                end
+                
+                # Accumulate squared deviation
+                diff = Float32(expert_count) - ideal_count
+                sum_squared_deviations += diff * diff
+            end
             
             # Compute variance
-            variance = T(0)
-            for i in 1:num_experts
-                diff = T(assignment_counts[i]) - ideal_count
-                variance += diff * diff
-            end
-            variance /= T(num_experts)
+            variance = sum_squared_deviations / Float32(num_experts)
             
             # Compute balance score (1.0 = perfect balance)
-            if ideal_count > T(0)
-                balance_scores[1] = T(1) - sqrt(variance) / ideal_count
+            if ideal_count > Float32(0)
+                balance_scores[1] = Float32(1) - sqrt(variance) / ideal_count
             else
-                balance_scores[1] = T(1)
+                balance_scores[1] = Float32(1)
             end
         else
-            balance_scores[1] = T(1)
+            balance_scores[1] = Float32(1)
         end
     end
     
     return nothing
 end
-
 # Expert usage entropy computation kernel
 function gpu_expert_entropy_kernel!(
     entropy_values::CuDeviceVector{T},      # 1 element  
@@ -501,12 +513,12 @@ end
 
 function launch_load_balance_score_kernel!(
     expert_assignments::CuMatrix{Int32}
-) where T<:AbstractFloat
+)  # Remove the "where T<:AbstractFloat"
     
-    num_experts = maximum(Array(expert_assignments))  # Assuming 1-indexed
+    num_experts = Int64(maximum(Array(expert_assignments)))   # Assuming 1-indexed
     top_k, batch_size = size(expert_assignments)
     
-    balance_scores = CUDA.zeros(T, 1)
+    balance_scores = CUDA.zeros(Float32, 1)  # Use concrete Float32 instead of T
     
     threads = 1
     blocks = 1
