@@ -1,691 +1,729 @@
 """
-GPU MoE Layer - Main Orchestrating Component
+GPU MoE Layer Implementation
 
-Complete GPU-accelerated Mixture of Experts layer that orchestrates gating, expert computation,
-and load balancing with optimized parallel processing, memory management, and batch efficiency.
-Provides functionally equivalent API to CPU implementation with GPU acceleration.
+Complete GPU-accelerated Mixture of Experts layer that orchestrates TopK gating,
+gated experts, and Switch Transformer loss for optimal GPU performance.
+This is the main orchestrating component that ties all GPU MoE components together.
 """
 
-# Main GPU MoE Layer configuration
-struct GPUMoELayerConfig{T<:AbstractFloat}
-    # Core MoE parameters
-    input_dim::Int
-    hidden_dim::Int
-    output_dim::Int
-    num_experts::Int
-    top_k::Int
-    
-    # Expert configuration
-    expert_type::Symbol                    # Only :gated supported for now
-    expert_dropout::Float32
-    expert_bias::Bool
-    
-    # Gating configuration  
-    gate_type::Symbol                      # Only :topk supported for now
-    router_bias::Bool
-    noise_scale::Float32
-    
-    # Load balancing
-    balance_loss_type::Symbol              # Only :switch supported for now
-    balance_alpha::T
-    z_loss_weight::T
-    
-    # GPU-specific optimizations
-    use_mixed_precision::Bool
-    enable_kernel_fusion::Bool
-    memory_efficient::Bool
-    
-    # Batch processing
-    batch_config::GPUBatchConfig{T}
-    
-    function GPUMoELayerConfig{T}(;
-        input_dim::Int,
-        hidden_dim::Int,
-        output_dim::Int,
-        num_experts::Int = 8,
-        top_k::Int = 2,
-        expert_type::Symbol = :gated,
-        expert_dropout::Float32 = 0.0f0,
-        expert_bias::Bool = false,
-        gate_type::Symbol = :topk,
-        router_bias::Bool = false,
-        noise_scale::Float32 = 0.0f0,
-        balance_loss_type::Symbol = :switch,
-        balance_alpha::T = T(0.01),
-        z_loss_weight::T = T(0.001),
-        use_mixed_precision::Bool = false,
-        enable_kernel_fusion::Bool = true,
-        memory_efficient::Bool = true,
-        batch_config::Union{Nothing, GPUBatchConfig{T}} = nothing
-    ) where T<:AbstractFloat
-        
-        # Validate core parameters
-        if input_dim <= 0 || hidden_dim <= 0 || output_dim <= 0
-            throw(ArgumentError("All dimensions must be positive"))
-        end
-        
-        if num_experts <= 0 || top_k <= 0 || top_k > num_experts
-            throw(ArgumentError("Invalid expert configuration"))
-        end
-        
-        # Validate supported configurations (scope limitation)
-        if expert_type != :gated
-            throw(ArgumentError("Only :gated expert type is supported in current implementation"))
-        end
-        
-        if gate_type != :topk
-            throw(ArgumentError("Only :topk gate type is supported in current implementation"))
-        end
-        
-        if balance_loss_type != :switch
-            throw(ArgumentError("Only :switch balance loss type is supported in current implementation"))
-        end
-        
-        if top_k != 2
-            throw(ArgumentError("Only top_k=2 is supported in current implementation"))
-        end
-        
-        # Create default batch config if not provided
-        if isnothing(batch_config)
-            batch_config = GPUBatchConfig{T}()
-        end
-        
-        return new{T}(
-            input_dim, hidden_dim, output_dim, num_experts, top_k,
-            expert_type, expert_dropout, expert_bias,
-            gate_type, router_bias, noise_scale,
-            balance_loss_type, balance_alpha, z_loss_weight,
-            use_mixed_precision, enable_kernel_fusion, memory_efficient,
-            batch_config
-        )
-    end
-end
-
-# Convenience constructor
-GPUMoELayerConfig(args...; kwargs...) = GPUMoELayerConfig{Float32}(args...; kwargs...)
-
-# Main GPU MoE Layer
+# Main GPU MoE Layer structure
 struct GPUMoELayer{T<:AbstractFloat}
-    # Configuration
-    config::GPUMoELayerConfig{T}
-    gpu_config::GPUMoEConfig{T}
-    
     # Core components
     experts::Vector{GPUGatedExpert{T}}
     gating::GPUTopKGating{T}
-    loss_function::GPUSwitchTransformerLoss{T}
+    load_balance_loss::GPUSwitchTransformerLoss{T}
+    
+    # Configuration
+    config::GPUMoEConfig{T}
     
     # Workspace management
-    current_workspace::Ref{Union{Nothing, GPUBatchWorkspace{T}}}
+    workspace::Dict{Symbol, CuArray}
     workspace_allocated::Ref{Bool}
+    workspace_size_bytes::Ref{Int64}
     
-    # CUDA streams for parallel processing
-    streams::Vector{CUDA.CuStream}
-    main_stream::CUDA.CuStream
+    # Routing state
+    routing_state::GPURoutingState{T}
     
-    # Performance tracking
+    # Performance optimization settings
+    enable_expert_parallelism::Bool
+    use_dynamic_batching::Bool
+    enable_memory_optimization::Bool
+    
+    # Statistics tracking
+    training_stats::Dict{Symbol, Any}
+    performance_stats::Dict{Symbol, Any}
+    
+    # Performance counters
     forward_calls::Ref{Int}
     total_forward_time::Ref{Float64}
-    gating_time::Ref{Float64}
-    expert_time::Ref{Float64}
+    routing_time::Ref{Float64}
+    expert_compute_time::Ref{Float64}
     combination_time::Ref{Float64}
-    loss_time::Ref{Float64}
+    loss_compute_time::Ref{Float64}
     
-    # Training state
-    is_training::Ref{Bool}
-    last_loss_value::Ref{T}
-    
-    function GPUMoELayer{T}(config::GPUMoELayerConfig{T}) where T<:AbstractFloat
+    function GPUMoELayer{T}(
+        config::GPUMoEConfig{T};
+        enable_expert_parallelism::Bool = true,
+        use_dynamic_batching::Bool = true,
+        enable_memory_optimization::Bool = true,
+        initialization_scale::T = T(0.02)
+    ) where T<:AbstractFloat
         
-        # Create GPU MoE configuration
-gpu_config = GPUMoEConfig{T}(
-    config.input_dim,
-    config.hidden_dim,
-    config.output_dim,
-    config.num_experts,
-    config.top_k;
-    use_half_precision = config.use_mixed_precision,  # FIX: Map to correct parameter
-    enable_kernel_fusion = config.enable_kernel_fusion,
-    max_batch_size = config.batch_config.max_batch_size
-)
+        # Validate configuration
+        validate_gpu_moe_config(config)
+        
         # Create experts
-        experts = GPUGatedExpert{T}[]
-        for expert_id in 1:config.num_experts
-            expert = create_random_gpu_expert(
-                gpu_config;
-                expert_id = expert_id,
-                use_bias = config.expert_bias
-            )
-            push!(experts, expert)
-        end
+        experts = create_gpu_experts(config, initialization_scale)
         
-        # Create gating mechanism (TopKGating only)
-        gating = create_random_gpu_gating(gpu_config, config.top_k)
+        # Create gating mechanism
+        gating = create_gpu_gating(config)
         
-        # Create loss function (SwitchTransformerLoss only)
-        loss_function = create_gpu_switch_loss(gpu_config, config.balance_alpha)
+        # Create load balancing loss
+        load_balance_loss = create_gpu_switch_loss(config)
         
         # Initialize workspace management
-        current_workspace = Ref{Union{Nothing, GPUBatchWorkspace{T}}}(nothing)
+        workspace = Dict{Symbol, CuArray}()
         workspace_allocated = Ref(false)
+        workspace_size_bytes = Ref(Int64(0))
         
-        # Create CUDA streams
-        streams = create_batch_streams(config.batch_config)
-        main_stream = streams[1]  # Use first stream as main stream
+        # Create routing state
+        routing_state = GPURoutingState{T}(config.num_experts, config.top_k, config.max_batch_size)
         
-        # Initialize performance tracking
-        forward_calls = Ref(0)
-        total_forward_time = Ref(0.0)
-        gating_time = Ref(0.0)
-        expert_time = Ref(0.0)
-        combination_time = Ref(0.0)
-        loss_time = Ref(0.0)
-        
-        # Initialize training state
-        is_training = Ref(false)
-        last_loss_value = Ref(T(0))
-        
-        layer = new{T}(
-            config, gpu_config,
-            experts, gating, loss_function,
-            current_workspace, workspace_allocated,
-            streams, main_stream,
-            forward_calls, total_forward_time, gating_time, expert_time, combination_time, loss_time,
-            is_training, last_loss_value
+        # Initialize statistics tracking
+        training_stats = Dict{Symbol, Any}(
+            :tokens_per_expert => zeros(Int, config.num_experts),
+            :routing_entropy => Float32[],
+            :capacity_overflow => 0,
+            :expert_utilization => zeros(Float32, config.num_experts),
+            :load_balance_scores => Float32[]
         )
         
-        @info "Created GPU MoE Layer with $(config.num_experts) experts, top_k=$(config.top_k)"
+        performance_stats = Dict{Symbol, Any}(
+            :forward_calls => 0,
+            :total_time_ms => 0.0,
+            :avg_time_ms => 0.0,
+            :throughput_tokens_per_sec => 0.0,
+            :gpu_utilization => 0.0
+        )
         
-        return layer
+        # Initialize performance counters
+        forward_calls = Ref(0)
+        total_forward_time = Ref(0.0)
+        routing_time = Ref(0.0)
+        expert_compute_time = Ref(0.0)
+        combination_time = Ref(0.0)
+        loss_compute_time = Ref(0.0)
+        
+        moe_layer = new{T}(
+            experts, gating, load_balance_loss,
+            config,
+            workspace, workspace_allocated, workspace_size_bytes,
+            routing_state,
+            enable_expert_parallelism, use_dynamic_batching, enable_memory_optimization,
+            training_stats, performance_stats,
+            forward_calls, total_forward_time, routing_time, 
+            expert_compute_time, combination_time, loss_compute_time
+        )
+        
+        return moe_layer
     end
 end
 
 # Convenience constructor
-GPUMoELayer(config::GPUMoELayerConfig{T}) where T = GPUMoELayer{T}(config)
+function GPUMoELayer(config::GPUMoEConfig{T}; kwargs...) where T
+    return GPUMoELayer{T}(config; kwargs...)
+end
 
-"""
-    gpu_moe_forward!(output, input, moe_layer; training=false, return_loss=false)
-
-Main forward pass through GPU MoE layer with full orchestration.
-"""
-function gpu_moe_forward!(
-    output::CuMatrix{T},                   # output_dim × batch_size
-    input::CuMatrix{T},                    # input_dim × batch_size
-    moe_layer::GPUMoELayer{T};
+# Main forward pass - this is the core orchestration function
+function (moe_layer::GPUMoELayer{T})(
+    input::CuMatrix{T};
     training::Bool = false,
-    return_loss::Bool = false,
     return_stats::Bool = false
 ) where T<:AbstractFloat
     
     moe_layer.forward_calls[] += 1
-    moe_layer.is_training[] = training
     start_time = time()
     
     try
         # Validate input dimensions
         input_dim, batch_size = size(input)
-        output_dim_expected, batch_size_output = size(output)
-        
         if input_dim != moe_layer.config.input_dim
-            throw(DimensionMismatch("Input dimension mismatch: got $input_dim, expected $(moe_layer.config.input_dim)"))
+            throw(DimensionMismatch("Input dimension $input_dim does not match config $(moe_layer.config.input_dim)"))
         end
         
-        if output_dim_expected != moe_layer.config.output_dim
-            throw(DimensionMismatch("Output dimension mismatch: got $output_dim_expected, expected $(moe_layer.config.output_dim)"))
-        end
+        # Allocate workspace if needed
+        workspace = allocate_moe_workspace!(moe_layer, batch_size)
         
-        if batch_size != batch_size_output
-            throw(DimensionMismatch("Batch size mismatch between input ($batch_size) and output ($batch_size_output)"))
+        # Prepare output tensor
+        output = workspace[:main_output]
+        if size(output, 2) < batch_size
+            workspace[:main_output] = gpu_zeros(T, moe_layer.config.output_dim, batch_size)
+            output = workspace[:main_output]
         end
+        output_view = view(output, :, 1:batch_size)
+        fill!(output_view, T(0))  # Initialize to zero
         
-# Optimize batch size if needed
-optimized_batch_size = optimize_batch_size(moe_layer.gpu_config, moe_layer.config.batch_config, batch_size)
-if optimized_batch_size != batch_size
-    @warn "Batch size optimization reduced batch from $batch_size to $optimized_batch_size"
-    # For now, let's disable the optimization or handle it properly
-    # Use the optimized size everywhere
-    batch_size = optimized_batch_size  # Update the batch_size variable
-end
-
-# Get or create workspace
-workspace = get_batch_workspace(moe_layer.gpu_config, moe_layer.config.batch_config, batch_size)
-
-# Phase 1: Gating computation  
-gating_start = time()
-@gpu_time "moe_gating_phase" begin
-    expert_indices = view(workspace.expert_indices, :, 1:batch_size)  # Now using optimized batch_size
-    expert_gates = view(workspace.expert_gates, :, 1:batch_size)      # Now using optimized batch_size
-            
-            # Compute gating decisions
-            expert_indices_result, expert_gates_result, router_probs = gpu_topk_gating_forward!(
-                expert_indices, expert_gates, input, moe_layer.gating;
-                training = training,
-                return_router_probs = true
+        # Phase 1: TopK Gating - Route tokens to experts
+        routing_start = time()
+        expert_indices, expert_gates, router_probs = gpu_topk_gating_forward!(
+            workspace[:expert_indices][:, 1:batch_size],
+            workspace[:expert_gates][:, 1:batch_size],
+            input,
+            moe_layer.gating;
+            training = training,
+            return_router_probs = true
+        )
+        moe_layer.routing_time[] += time() - routing_start
+        
+        # Phase 2: Token Routing - Organize tokens by expert assignment
+        routing_organize_start = time()
+        routing_info = organize_token_routing!(
+            moe_layer.routing_state,
+            expert_indices,
+            expert_gates,
+            batch_size
+        )
+        moe_layer.routing_time[] += time() - routing_organize_start
+        
+        # Phase 3: Parallel Expert Computation
+        expert_start = time()
+        if moe_layer.enable_expert_parallelism
+            compute_experts_parallel!(
+                output_view,
+                input,
+                moe_layer.experts,
+                routing_info,
+                workspace
+            )
+        else
+            compute_experts_sequential!(
+                output_view,
+                input,
+                moe_layer.experts,
+                routing_info,
+                workspace
             )
         end
-        moe_layer.gating_time[] += time() - gating_start
+        moe_layer.expert_compute_time[] += time() - expert_start
         
-        # Phase 2: Token routing and assignment
-        routing_start = time()
-        @gpu_time "moe_routing_phase" begin
-            # Create token assignment mapping
-            assignment = create_token_assignment(expert_indices_result, expert_gates_result, moe_layer.gpu_config)
-            
-            # Validate assignment
-            if !validate_token_assignment(assignment)
-                @warn "Token assignment validation failed"
-            end
-            
-            # Route tokens to expert-specific buffers
-            expert_inputs = [view(workspace.expert_inputs[i], :, 1:Int(assignment.expert_token_counts[i])) 
-                           for i in 1:moe_layer.config.num_experts if assignment.expert_token_counts[i] > 0]
-            active_expert_ids = [i for i in 1:moe_layer.config.num_experts if assignment.expert_token_counts[i] > 0]
-            
-            if !isempty(active_expert_ids)
-                route_tokens_to_experts!(workspace.expert_inputs, input, assignment)
-            end
-        end
-        routing_time = time() - routing_start
-        
-        # Phase 3: Parallel expert computation
-        expert_start = time()
-        @gpu_time "moe_expert_phase" begin
-            # Process active experts in parallel
-            if !isempty(active_expert_ids)
-                process_experts_parallel!(workspace, moe_layer.experts, assignment, active_expert_ids, training)
-            end
-        end
-        moe_layer.expert_time[] += time() - expert_start
-        
-        # Phase 4: Output combination
-        combination_start = time()
-        @gpu_time "moe_combination_phase" begin
-            # Combine expert outputs back to original token order
-            if !isempty(active_expert_ids)
-                combine_expert_outputs!(output, workspace.expert_outputs, assignment)
-            else
-                # No experts activated - zero output
-                fill!(output, T(0))
-            end
-        end
-        moe_layer.combination_time[] += time() - combination_start
-        
-        # Phase 5: Load balancing loss computation
-        loss_value = T(0)
-        if training && return_loss
+        # Phase 4: Load Balancing Loss Computation (if training)
+        balance_loss = T(0)
+        if training
             loss_start = time()
-            @gpu_time "moe_loss_phase" begin
-                loss_value = gpu_switch_loss_forward!(expert_indices_result, router_probs, moe_layer.loss_function)
-                moe_layer.last_loss_value[] = loss_value
+            balance_loss = gpu_switch_loss_forward!(
+                expert_indices,
+                router_probs,
+                moe_layer.load_balance_loss
+            )
+            moe_layer.loss_compute_time[] += time() - loss_start
+        end
+        
+        # Phase 5: Update Statistics
+        if training || return_stats
+            update_moe_statistics!(
+                moe_layer,
+                expert_indices,
+                expert_gates,
+                router_probs,
+                balance_loss,
+                batch_size
+            )
+        end
+        
+        # Return results
+        if return_stats
+            current_stats = get_current_moe_statistics(moe_layer)
+            if training
+                return output_view, balance_loss, current_stats
+            else
+                return output_view, current_stats
             end
-            moe_layer.loss_time[] += time() - loss_start
-        end
-        
-        # Clean up workspace
-        release_batch_workspace!(workspace)
-        moe_layer.current_workspace[] = nothing
-        moe_layer.workspace_allocated[] = false
-        
-        # Prepare return values
-        result = if return_loss && return_stats
-            stats = get_moe_layer_stats(moe_layer, assignment)
-            (output, loss_value, stats)
-        elseif return_loss
-            (output, loss_value)
-        elseif return_stats
-            stats = get_moe_layer_stats(moe_layer, assignment)
-            (output, stats)
         else
-            output
+            if training
+                return output_view, balance_loss
+            else
+                return output_view
+            end
         end
-        
-        return result
         
     catch e
-        # Clean up on error
-        if moe_layer.workspace_allocated[]
-            workspace = moe_layer.current_workspace[]
-            if !isnothing(workspace)
-                release_batch_workspace!(workspace)
-            end
-            moe_layer.current_workspace[] = nothing
-            moe_layer.workspace_allocated[] = false
-        end
-        
-        @error "Error in GPU MoE forward pass" exception=e
+        @error "Error in GPU MoE layer forward pass" exception=e
         rethrow(e)
-        
     finally
         elapsed_time = time() - start_time
         moe_layer.total_forward_time[] += elapsed_time
+        
+        # Update performance statistics
+        update_performance_stats!(moe_layer, elapsed_time, size(input, 2))
     end
 end
 
-"""
-    process_experts_parallel!(workspace, experts, assignment, active_expert_ids, training)
-
-Process multiple experts in parallel on GPU.
-"""
-function process_experts_parallel!(
-    workspace::GPUBatchWorkspace{T},
-    experts::Vector{GPUGatedExpert{T}},
-    assignment::GPUTokenAssignment{T},
-    active_expert_ids::Vector{Int},
-    training::Bool
-) where T<:AbstractFloat
+# Workspace allocation and management
+function allocate_moe_workspace!(moe_layer::GPUMoELayer{T}, batch_size::Int) where T
     
-    # Process each active expert
-    for expert_id in active_expert_ids
-        expert = experts[expert_id]
-        expert_token_count = Int(assignment.expert_token_counts[expert_id])
-        
-        if expert_token_count > 0
-            # Get input and output buffers for this expert
-            expert_input = view(workspace.expert_inputs[expert_id], :, 1:expert_token_count)
-            expert_output = view(workspace.expert_outputs[expert_id], :, 1:expert_token_count)
-            
-            # Run expert forward pass
-            @gpu_time "expert_$expert_id" gpu_gated_expert_forward!(
-                expert_output, expert_input, expert;
-                training = training
-            )
+    if moe_layer.workspace_allocated[] && 
+       haskey(moe_layer.workspace, :allocated_batch_size) &&
+       moe_layer.workspace[:allocated_batch_size] >= batch_size
+        return moe_layer.workspace  # Already allocated with sufficient size
+    end
+    
+    config = moe_layer.config
+    workspace = moe_layer.workspace
+    
+    # Calculate workspace requirements
+    top_k = config.top_k
+    num_experts = config.num_experts
+    input_dim = config.input_dim
+    hidden_dim = config.hidden_dim
+    output_dim = config.output_dim
+    
+    # Core MoE computation buffers
+    workspace[:main_output] = gpu_zeros(T, output_dim, batch_size; aligned=true)
+    workspace[:expert_indices] = CUDA.zeros(Int32, top_k, batch_size)
+    workspace[:expert_gates] = gpu_zeros(T, top_k, batch_size; aligned=true)
+    
+    # Expert computation workspace
+    max_tokens_per_expert = batch_size  # Worst case: all tokens go to one expert
+    workspace[:expert_inputs] = gpu_zeros(T, input_dim, max_tokens_per_expert; aligned=true)
+    workspace[:expert_outputs] = gpu_zeros(T, output_dim, max_tokens_per_expert; aligned=true)
+    
+    # Token routing workspace
+    workspace[:token_assignments] = CUDA.zeros(Int32, top_k * batch_size)
+    workspace[:expert_token_counts] = CUDA.zeros(Int32, num_experts)
+    workspace[:expert_token_offsets] = CUDA.zeros(Int32, num_experts + 1)
+    workspace[:sorted_tokens] = CUDA.zeros(Int32, top_k * batch_size)
+    workspace[:gating_weights] = gpu_zeros(T, top_k * batch_size; aligned=true)
+    
+    # Temporary computation buffers for experts
+    workspace[:temp_hidden] = gpu_zeros(T, hidden_dim, max_tokens_per_expert; aligned=true)
+    workspace[:temp_gate] = gpu_zeros(T, hidden_dim, max_tokens_per_expert; aligned=true)
+    workspace[:temp_up] = gpu_zeros(T, hidden_dim, max_tokens_per_expert; aligned=true)
+    
+    # Memory optimization: reuse buffers where possible
+    if moe_layer.enable_memory_optimization
+        # Use views of larger buffers for smaller operations
+        workspace[:small_buffer_1] = gpu_zeros(T, max(hidden_dim, output_dim), batch_size; aligned=true)
+        workspace[:small_buffer_2] = gpu_zeros(T, max(hidden_dim, output_dim), batch_size; aligned=true)
+    end
+    
+    # Store allocation metadata
+    workspace[:allocated_batch_size] = batch_size
+    workspace[:allocation_time] = time()
+    
+    # Calculate total workspace memory usage
+    total_bytes = Int64(0)
+    for (key, array) in workspace
+        if isa(array, CuArray)
+            total_bytes += sizeof(array)
         end
     end
     
-    # Synchronize all expert computations
-    CUDA.synchronize()
+    moe_layer.workspace_allocated[] = true
+    moe_layer.workspace_size_bytes[] = total_bytes
+    
+    @debug "Allocated GPU MoE workspace: $(total_bytes ÷ (1024^2)) MB for batch size $batch_size"
+    
+    return workspace
 end
 
-"""
-    get_moe_layer_stats(moe_layer, assignment)
-
-Get comprehensive statistics about MoE layer execution.
-"""
-function get_moe_layer_stats(moe_layer::GPUMoELayer{T}, assignment::GPUTokenAssignment{T}) where T<:AbstractFloat
+# Parallel expert computation - core GPU acceleration
+function compute_experts_parallel!(
+    output::CuMatrix{T},
+    input::CuMatrix{T},
+    experts::Vector{GPUGatedExpert{T}},
+    routing_info::GPURoutingInfo{T},
+    workspace::Dict{Symbol, CuArray}
+) where T<:AbstractFloat
     
-    # Get assignment statistics
-    assignment_stats = get_assignment_statistics(assignment)
+    # Process all experts that have assigned tokens
+    active_experts = findall(count -> count > 0, routing_info.expert_token_counts)
     
-    # Get performance statistics
-    forward_calls = moe_layer.forward_calls[]
-    total_time = moe_layer.total_forward_time[]
-    
-    performance_stats = Dict{String, Any}(
-        "forward_calls" => forward_calls,
-        "total_forward_time_ms" => total_time * 1000,
-        "avg_forward_time_ms" => forward_calls > 0 ? (total_time / forward_calls) * 1000 : 0.0,
-        "gating_time_ms" => moe_layer.gating_time[] * 1000,
-        "expert_time_ms" => moe_layer.expert_time[] * 1000,
-        "combination_time_ms" => moe_layer.combination_time[] * 1000,
-        "loss_time_ms" => moe_layer.loss_time[] * 1000,
-        "last_loss_value" => moe_layer.last_loss_value[]
-    )
-    
-    # Get component performance stats
-    gating_stats = get_gating_performance_stats(moe_layer.gating)
-    loss_stats = get_loss_performance_stats(moe_layer.loss_function)
-    
-    expert_stats = Dict{String, Any}()
-    for (i, expert) in enumerate(moe_layer.experts)
-        expert_stats["expert_$i"] = get_expert_performance_stats(expert)
+    if isempty(active_experts)
+        @warn "No experts have assigned tokens"
+        return output
     end
     
-    # Get memory pool statistics
-    memory_stats = get_memory_pool_statistics()
-    
-    return Dict{String, Any}(
-        "assignment" => assignment_stats,
-        "performance" => performance_stats,
-        "gating" => gating_stats,
-        "loss" => loss_stats,
-        "experts" => expert_stats,
-        "memory" => memory_stats,
-        "configuration" => Dict(
-            "num_experts" => moe_layer.config.num_experts,
-            "top_k" => moe_layer.config.top_k,
-            "input_dim" => moe_layer.config.input_dim,
-            "hidden_dim" => moe_layer.config.hidden_dim,
-            "output_dim" => moe_layer.config.output_dim
+    # Launch expert computations in parallel (GPU handles the parallelism)
+    for expert_id in active_experts
+        token_count = routing_info.expert_token_counts[expert_id]
+        if token_count == 0
+            continue
+        end
+        
+        # Get token indices for this expert
+        start_idx = routing_info.expert_token_offsets[expert_id] + 1
+        end_idx = routing_info.expert_token_offsets[expert_id + 1]
+        
+        if start_idx > end_idx
+            continue
+        end
+        
+        # Get the tokens assigned to this expert
+        assigned_token_indices = routing_info.sorted_token_indices[start_idx:end_idx]
+        assigned_weights = routing_info.sorted_gating_weights[start_idx:end_idx]
+        
+        # Extract input for this expert
+        expert_input = workspace[:expert_inputs][:, 1:token_count]
+        extract_tokens_for_expert!(expert_input, input, assigned_token_indices)
+        
+        # Run expert forward pass
+        expert_output = workspace[:expert_outputs][:, 1:token_count]
+        gpu_gated_expert_forward!(expert_output, expert_input, experts[expert_id])
+        
+        # Apply gating weights and accumulate to output
+        apply_gating_weights_and_accumulate!(
+            output,
+            expert_output,
+            assigned_token_indices,
+            assigned_weights
         )
-    )
+    end
+    
+    return output
 end
 
-"""
-    reset_moe_layer_stats!(moe_layer)
-
-Reset all performance statistics for the MoE layer.
-"""
-function reset_moe_layer_stats!(moe_layer::GPUMoELayer{T}) where T<:AbstractFloat
+# Sequential expert computation (fallback)
+function compute_experts_sequential!(
+    output::CuMatrix{T},
+    input::CuMatrix{T},
+    experts::Vector{GPUGatedExpert{T}},
+    routing_info::GPURoutingInfo{T},
+    workspace::Dict{Symbol, CuArray}
+) where T<:AbstractFloat
     
-    # Reset layer performance stats
+    # This is essentially the same as parallel but processes experts one by one
+    # GPU will still parallelize within each expert computation
+    compute_experts_parallel!(output, input, experts, routing_info, workspace)
+    
+    return output
+end
+
+# Token extraction for expert computation
+function extract_tokens_for_expert!(
+    expert_input::CuMatrix{T},
+    full_input::CuMatrix{T},
+    token_indices::CuVector{Int32}
+) where T<:AbstractFloat
+    
+    input_dim, expert_batch_size = size(expert_input)
+    total_input_dim, total_batch_size = size(full_input)
+    
+    if input_dim != total_input_dim
+        throw(DimensionMismatch("Input dimensions must match"))
+    end
+    
+    if expert_batch_size != length(token_indices)
+        throw(DimensionMismatch("Expert batch size must match number of token indices"))
+    end
+    
+    # Launch CUDA kernel to extract tokens
+    total_elements = input_dim * expert_batch_size
+    kernel_config = GPUKernelConfig(total_elements)
+    
+    @cuda threads=kernel_config.threads_per_block blocks=kernel_config.blocks_per_grid extract_tokens_kernel!(
+        expert_input, full_input, token_indices, input_dim, expert_batch_size
+    )
+    
+    CUDA.synchronize()
+    return expert_input
+end
+
+# CUDA kernel for token extraction
+function extract_tokens_kernel!(
+    expert_input::CuDeviceMatrix{T},
+    full_input::CuDeviceMatrix{T},
+    token_indices::CuDeviceVector{Int32},
+    input_dim::Int,
+    expert_batch_size::Int
+) where T
+    
+    idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    
+    if idx <= input_dim * expert_batch_size
+        # Convert linear index to 2D coordinates
+        feature_idx = ((idx - 1) % input_dim) + 1
+        expert_token_idx = ((idx - 1) ÷ input_dim) + 1
+        
+        if expert_token_idx <= expert_batch_size
+            # Get the original token index
+            original_token_idx = token_indices[expert_token_idx]
+            
+            # Copy the feature
+            expert_input[feature_idx, expert_token_idx] = full_input[feature_idx, original_token_idx]
+        end
+    end
+    
+    return nothing
+end
+
+# Apply gating weights and accumulate to output
+function apply_gating_weights_and_accumulate!(
+    output::CuMatrix{T},
+    expert_output::CuMatrix{T},
+    token_indices::CuVector{Int32},
+    gating_weights::CuVector{T}
+) where T<:AbstractFloat
+    
+    output_dim, expert_batch_size = size(expert_output)
+    total_output_dim, total_batch_size = size(output)
+    
+    if output_dim != total_output_dim
+        throw(DimensionMismatch("Output dimensions must match"))
+    end
+    
+    if expert_batch_size != length(token_indices) || expert_batch_size != length(gating_weights)
+        throw(DimensionMismatch("Batch sizes must match"))
+    end
+    
+    # Launch CUDA kernel to apply weights and accumulate
+    total_elements = output_dim * expert_batch_size
+    kernel_config = GPUKernelConfig(total_elements)
+    
+    @cuda threads=kernel_config.threads_per_block blocks=kernel_config.blocks_per_grid accumulate_weighted_outputs_kernel!(
+        output, expert_output, token_indices, gating_weights, output_dim, expert_batch_size
+    )
+    
+    CUDA.synchronize()
+    return output
+end
+
+# CUDA kernel for weighted accumulation
+function accumulate_weighted_outputs_kernel!(
+    output::CuDeviceMatrix{T},
+    expert_output::CuDeviceMatrix{T},
+    token_indices::CuDeviceVector{Int32},
+    gating_weights::CuDeviceVector{T},
+    output_dim::Int,
+    expert_batch_size::Int
+) where T
+    
+    idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    
+    if idx <= output_dim * expert_batch_size
+        # Convert linear index to 2D coordinates
+        feature_idx = ((idx - 1) % output_dim) + 1
+        expert_token_idx = ((idx - 1) ÷ output_dim) + 1
+        
+        if expert_token_idx <= expert_batch_size
+            # Get the original token index and weight
+            original_token_idx = token_indices[expert_token_idx]
+            weight = gating_weights[expert_token_idx]
+            
+            # Apply weight and accumulate using atomic operation
+            weighted_value = expert_output[feature_idx, expert_token_idx] * weight
+            CUDA.atomic_add!(pointer(output, feature_idx + (original_token_idx - 1) * output_dim), weighted_value)
+        end
+    end
+    
+    return nothing
+end
+
+# Statistics and monitoring
+function update_moe_statistics!(
+    moe_layer::GPUMoELayer{T},
+    expert_indices::CuMatrix{Int32},
+    expert_gates::CuMatrix{T},
+    router_probs::CuMatrix{T},
+    balance_loss::T,
+    batch_size::Int
+) where T<:AbstractFloat
+    
+    stats = moe_layer.training_stats
+    
+    # Update expert token counts
+    expert_indices_cpu = Array(expert_indices)
+    for idx in expert_indices_cpu
+        if idx > 0 && idx <= length(stats[:tokens_per_expert])
+            stats[:tokens_per_expert][idx] += 1
+        end
+    end
+    
+    # Compute and store routing entropy
+    router_probs_cpu = Array(router_probs)
+    batch_entropy = -sum(router_probs_cpu .* log.(router_probs_cpu .+ 1e-8), dims=1)
+    push!(stats[:routing_entropy], mean(batch_entropy))
+    
+    # Compute expert utilization
+    expert_usage = zeros(Float32, moe_layer.config.num_experts)
+    for i in 1:moe_layer.config.num_experts
+        expert_usage[i] = sum(expert_indices_cpu .== i) / length(expert_indices_cpu)
+    end
+    stats[:expert_utilization] = expert_usage
+    
+    # Store load balance score
+    if balance_loss > 0
+        # Compute load balance score from expert usage
+        ideal_usage = 1.0f0 / moe_layer.config.num_experts
+        variance = sum((expert_usage .- ideal_usage).^2) / moe_layer.config.num_experts
+        balance_score = 1.0f0 - sqrt(variance) / ideal_usage
+        push!(stats[:load_balance_scores], balance_score)
+    end
+end
+
+function update_performance_stats!(moe_layer::GPUMoELayer{T}, elapsed_time::Float64, batch_size::Int) where T
+    stats = moe_layer.performance_stats
+    forward_calls = moe_layer.forward_calls[]
+    
+    # Update basic timing stats
+    stats[:forward_calls] = forward_calls
+    stats[:total_time_ms] = moe_layer.total_forward_time[] * 1000
+    stats[:avg_time_ms] = stats[:total_time_ms] / forward_calls
+    
+    # Compute throughput
+    total_tokens_processed = batch_size * forward_calls
+    stats[:throughput_tokens_per_sec] = total_tokens_processed / moe_layer.total_forward_time[]
+    
+    # GPU utilization (simplified metric)
+    total_gpu_time = (moe_layer.routing_time[] + moe_layer.expert_compute_time[] + 
+                     moe_layer.combination_time[] + moe_layer.loss_compute_time[])
+    stats[:gpu_utilization] = min(1.0, total_gpu_time / moe_layer.total_forward_time[])
+end
+
+function get_current_moe_statistics(moe_layer::GPUMoELayer{T}) where T
+    stats = Dict{String, Any}()
+    
+    # Copy training statistics
+    for (key, value) in moe_layer.training_stats
+        stats[String(key)] = copy(value)
+    end
+    
+    # Add performance statistics
+    for (key, value) in moe_layer.performance_stats
+        stats[String(key)] = value
+    end
+    
+    # Add detailed timing breakdown
+    total_time = moe_layer.total_forward_time[]
+    if total_time > 0
+        stats["timing_breakdown"] = Dict(
+            "routing_percentage" => (moe_layer.routing_time[] / total_time) * 100,
+            "expert_compute_percentage" => (moe_layer.expert_compute_time[] / total_time) * 100,
+            "combination_percentage" => (moe_layer.combination_time[] / total_time) * 100,
+            "loss_compute_percentage" => (moe_layer.loss_compute_time[] / total_time) * 100
+        )
+    end
+    
+    # Add memory usage
+    stats["workspace_size_mb"] = moe_layer.workspace_size_bytes[] / (1024^2)
+    
+    return stats
+end
+
+# Configuration validation
+function validate_gpu_moe_config(config::GPUMoEConfig{T}) where T
+    # Validate basic parameters
+    if config.num_experts <= 0
+        throw(ArgumentError("num_experts must be positive"))
+    end
+    
+    if config.top_k <= 0 || config.top_k > config.num_experts
+        throw(ArgumentError("top_k must be positive and not exceed num_experts"))
+    end
+    
+    if config.input_dim <= 0 || config.hidden_dim <= 0 || config.output_dim <= 0
+        throw(ArgumentError("All dimensions must be positive"))
+    end
+    
+    if config.max_batch_size <= 0
+        throw(ArgumentError("max_batch_size must be positive"))
+    end
+    
+    # Check GPU memory requirements
+    estimated_memory_mb = estimate_memory_requirements(config)
+    available_memory_mb = CUDA.available_memory() ÷ (1024^2)
+    
+    if estimated_memory_mb > available_memory_mb * 0.8  # Leave 20% buffer
+        @warn "Estimated memory usage ($estimated_memory_mb MB) may exceed available GPU memory ($available_memory_mb MB)"
+    end
+    
+    return true
+end
+
+function estimate_memory_requirements(config::GPUMoEConfig{T}) where T
+    # Rough estimation of memory requirements
+    element_size = sizeof(T)
+    
+    # Expert weights
+    expert_memory = config.num_experts * (
+        config.input_dim * config.hidden_dim +  # w1
+        config.hidden_dim * config.output_dim + # w2
+        config.input_dim * config.hidden_dim    # w3
+    ) * element_size
+    
+    # Router weights
+    router_memory = config.input_dim * config.num_experts * element_size
+    
+    # Workspace memory (rough estimate)
+    workspace_memory = config.max_batch_size * (
+        config.input_dim + config.hidden_dim + config.output_dim
+    ) * element_size * 10  # Factor for various intermediate buffers
+    
+    total_memory_bytes = expert_memory + router_memory + workspace_memory
+    return total_memory_bytes ÷ (1024^2)  # Convert to MB
+end
+
+# Factory functions for creating experts, gating, and loss
+function create_gpu_experts(config::GPUMoEConfig{T}, initialization_scale::T) where T
+    experts = Vector{GPUGatedExpert{T}}()
+    
+    for i in 1:config.num_experts
+        expert = create_random_gpu_expert(config; expert_id=i, initialization_scale=initialization_scale)
+        push!(experts, expert)
+    end
+    
+    return experts
+end
+
+function create_gpu_gating(config::GPUMoEConfig{T}) where T
+    return GPUTopKGating{T}(config.top_k, config)
+end
+
+function create_gpu_switch_loss(config::GPUMoEConfig{T}) where T
+    return GPUSwitchTransformerLoss{T}(T(0.01), config)  # Default alpha = 0.01
+end
+
+# Cleanup and resource management
+function free_moe_workspace!(moe_layer::GPUMoELayer)
+    if moe_layer.workspace_allocated[]
+        # Clear workspace references
+        empty!(moe_layer.workspace)
+        moe_layer.workspace_allocated[] = false
+        moe_layer.workspace_size_bytes[] = 0
+        
+        # Free individual component workspaces
+        for expert in moe_layer.experts
+            free_workspace!(expert)
+        end
+        
+        # Force garbage collection
+        GC.gc()
+        CUDA.reclaim()
+    end
+end
+
+# Performance monitoring
+function reset_moe_performance_stats!(moe_layer::GPUMoELayer)
     moe_layer.forward_calls[] = 0
     moe_layer.total_forward_time[] = 0.0
-    moe_layer.gating_time[] = 0.0
-    moe_layer.expert_time[] = 0.0
+    moe_layer.routing_time[] = 0.0
+    moe_layer.expert_compute_time[] = 0.0
     moe_layer.combination_time[] = 0.0
-    moe_layer.loss_time[] = 0.0
-    moe_layer.last_loss_value[] = T(0)
+    moe_layer.loss_compute_time[] = 0.0
     
-    # Reset component stats
-    reset_gating_performance_stats!(moe_layer.gating)
-    reset_loss_performance_stats!(moe_layer.loss_function)
-    
+    # Reset component performance stats
     for expert in moe_layer.experts
         reset_expert_performance_stats!(expert)
     end
     
-    @info "Reset all MoE layer performance statistics"
+    reset_gating_performance_stats!(moe_layer.gating)
+    reset_loss_performance_stats!(moe_layer.load_balance_loss)
+    
+    # Clear training statistics
+    fill!(moe_layer.training_stats[:tokens_per_expert], 0)
+    empty!(moe_layer.training_stats[:routing_entropy])
+    fill!(moe_layer.training_stats[:expert_utilization], 0.0f0)
+    empty!(moe_layer.training_stats[:load_balance_scores])
+    moe_layer.training_stats[:capacity_overflow] = 0
 end
 
-"""
-    optimize_moe_layer!(moe_layer, target_batch_size)
-
-Optimize MoE layer for specific batch size and usage patterns.
-"""
-function optimize_moe_layer!(moe_layer::GPUMoELayer{T}, target_batch_size::Int) where T<:AbstractFloat
+function get_moe_performance_report(moe_layer::GPUMoELayer{T}) where T
+    report = Dict{String, Any}()
     
-    @info "Optimizing MoE layer for batch size $target_batch_size"
+    # Overall performance
+    report["overall"] = get_current_moe_statistics(moe_layer)
     
-    # Optimize individual experts
-    for expert in moe_layer.experts
-        optimize_expert_for_batch_size!(expert, target_batch_size ÷ moe_layer.config.num_experts + 32)
-    end
+    # Component performance
+    report["gating"] = get_gating_performance_stats(moe_layer.gating)
+    report["load_balance_loss"] = get_loss_performance_stats(moe_layer.load_balance_loss)
     
-    # Optimize batch configuration
-    optimized_batch_size = optimize_batch_size(moe_layer.gpu_config, moe_layer.config.batch_config, target_batch_size)
-    
-    if optimized_batch_size != target_batch_size
-        @info "Optimized batch size: $target_batch_size → $optimized_batch_size"
-    end
-    
-    # Pre-warm GPU kernels with target batch size
-    @info "Pre-warming GPU kernels..."
-    warmup_input = CUDA.randn(T, moe_layer.config.input_dim, optimized_batch_size)
-    warmup_output = gpu_zeros(T, moe_layer.config.output_dim, optimized_batch_size)
-    
-    # Run a few warmup iterations
-    for _ in 1:3
-        gpu_moe_forward!(warmup_output, warmup_input, moe_layer; training=false)
-        CUDA.synchronize()
-    end
-    
-    @info "MoE layer optimization completed"
-end
-
-"""
-    validate_moe_layer(moe_layer)
-
-Comprehensive validation of MoE layer configuration and state.
-"""
-function validate_moe_layer(moe_layer::GPUMoELayer{T}) where T<:AbstractFloat
-    
-    validation_results = Dict{String, Any}()
-    all_valid = true
-    
-    # Validate configuration consistency
-    config_valid = true
-    if length(moe_layer.experts) != moe_layer.config.num_experts
-        @error "Expert count mismatch: config=$(moe_layer.config.num_experts), actual=$(length(moe_layer.experts))"
-        config_valid = false
-    end
-    
-    if moe_layer.gating.k != moe_layer.config.top_k
-        @error "Top-k mismatch: config=$(moe_layer.config.top_k), gating=$(moe_layer.gating.k)"
-        config_valid = false
-    end
-    
-    validation_results["configuration"] = config_valid
-    all_valid &= config_valid
-    
-    # Validate expert dimensions
-    expert_dims_valid = true
+    # Expert performance
+    expert_stats = []
     for (i, expert) in enumerate(moe_layer.experts)
-        weights = expert.weights
-        
-        if size(weights.w1) != (moe_layer.config.input_dim, moe_layer.config.hidden_dim)
-            @error "Expert $i w1 dimension mismatch: expected $(moe_layer.config.input_dim)×$(moe_layer.config.hidden_dim), got $(size(weights.w1))"
-            expert_dims_valid = false
-        end
-        
-        if size(weights.w2) != (moe_layer.config.hidden_dim, moe_layer.config.output_dim)
-            @error "Expert $i w2 dimension mismatch: expected $(moe_layer.config.hidden_dim)×$(moe_layer.config.output_dim), got $(size(weights.w2))"
-            expert_dims_valid = false
-        end
-        
-        if size(weights.w3) != (moe_layer.config.input_dim, moe_layer.config.hidden_dim)
-            @error "Expert $i w3 dimension mismatch: expected $(moe_layer.config.input_dim)×$(moe_layer.config.hidden_dim), got $(size(weights.w3))"
-            expert_dims_valid = false
-        end
+        expert_stat = get_expert_performance_stats(expert)
+        expert_stat["expert_id"] = i
+        push!(expert_stats, expert_stat)
     end
+    report["experts"] = expert_stats
     
-    validation_results["expert_dimensions"] = expert_dims_valid
-    all_valid &= expert_dims_valid
-    
-    # Validate gating dimensions
-    gating_dims_valid = true
-    router_size = size(moe_layer.gating.router_weights)
-    expected_router_size = (moe_layer.config.input_dim, moe_layer.config.num_experts)
-    
-    if router_size != expected_router_size
-        @error "Router dimension mismatch: expected $expected_router_size, got $router_size"
-        gating_dims_valid = false
-    end
-    
-    validation_results["gating_dimensions"] = gating_dims_valid
-    all_valid &= gating_dims_valid
-    
-    # Validate numerical stability
-    numerical_valid = true
-    
-    # Check expert weights for NaN/Inf
-    for (i, expert) in enumerate(moe_layer.experts)
-        weights = expert.weights
-        if !gpu_check_finite(weights.w1) || !gpu_check_finite(weights.w2) || !gpu_check_finite(weights.w3)
-            @error "Expert $i contains non-finite weights"
-            numerical_valid = false
-        end
-    end
-    
-    # Check router weights
-    if !gpu_check_finite(moe_layer.gating.router_weights)
-        @error "Router weights contain non-finite values"
-        numerical_valid = false
-    end
-    
-    validation_results["numerical_stability"] = numerical_valid
-    all_valid &= numerical_valid
-    
-    # Validate GPU memory state
-    memory_valid = true
-
-    
-    validation_results["memory_state"] = memory_valid
-    all_valid &= memory_valid
-    
-    validation_results["overall_valid"] = all_valid
-    
-    if all_valid
-        @info "MoE layer validation passed"
-    else
-        @error "MoE layer validation failed"
-    end
-    
-    return validation_results
-end
-
-"""
-    create_gpu_moe_layer(config)
-
-Factory function to create a complete GPU MoE layer.
-"""
-function create_gpu_moe_layer(config::GPUMoELayerConfig{T}) where T<:AbstractFloat
-    
-    @info "Creating GPU MoE layer..."
-    
-    # Validate CUDA availability
-    if !CUDA.functional()
-        throw(ErrorException("CUDA not functional - cannot create GPU MoE layer"))
-    end
-    
-    # Create the layer
-    moe_layer = GPUMoELayer{T}(config)
-    
-    # Validate the created layer
-    validation_results = validate_moe_layer(moe_layer)
-    if !validation_results["overall_valid"]
-        throw(ErrorException("Created MoE layer failed validation"))
-    end
-    
-    @info "GPU MoE layer created successfully"
-    return moe_layer
-end
-
-"""
-    benchmark_moe_layer(moe_layer, batch_sizes; num_warmup=3, num_benchmark=10)
-
-Benchmark MoE layer performance across different batch sizes.
-"""
-function benchmark_moe_layer(
-    moe_layer::GPUMoELayer{T},
-    batch_sizes::Vector{Int};
-    num_warmup::Int = 3,
-    num_benchmark::Int = 10,
-    include_loss::Bool = true
-) where T<:AbstractFloat
-    
-    results = Dict{Int, Dict{String, Float64}}()
-    
-    for batch_size in batch_sizes
-        @info "Benchmarking MoE layer with batch size $batch_size"
-        
-        # Create test data
-        input = CUDA.randn(T, moe_layer.config.input_dim, batch_size)
-        output = gpu_zeros(T, moe_layer.config.output_dim, batch_size)
-        
-        # Warmup
-        for _ in 1:num_warmup
-            gpu_moe_forward!(output, input, moe_layer; training=include_loss, return_loss=include_loss)
-            CUDA.synchronize()
-        end
-        
-        # Benchmark
-        times = Float64[]
-        for _ in 1:num_benchmark
-            start_time = time_ns()
-            result = gpu_moe_forward!(output, input, moe_layer; training=include_loss, return_loss=include_loss)
-            CUDA.synchronize()
-            end_time = time_ns()
-            push!(times, (end_time - start_time) / 1e6)  # Convert to ms
-        end
-        
-        results[batch_size] = Dict(
-            "mean_time_ms" => Statistics.mean(times),
-            "std_time_ms" => Statistics.std(times),
-            "min_time_ms" => minimum(times),
-            "max_time_ms" => maximum(times),
-            "throughput_tokens_per_sec" => batch_size / (Statistics.mean(times) / 1000)
-        )
-    end
-    
-    return results
+    return report
 end

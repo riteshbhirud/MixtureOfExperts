@@ -37,22 +37,40 @@ export get_loss_performance_stats, reset_loss_performance_stats!
 export benchmark_loss_computation, AdaptiveLossScaling
 export monitor_expert_balance, analyze_loss_history
 
-export GPUTokenAssignment, create_token_assignment, route_tokens_to_experts!
-export combine_expert_outputs!, validate_token_assignment, get_assignment_statistics
-export optimize_assignment_memory!
-export GPUBatchConfig, GPUBatchWorkspace, get_batch_workspace, release_batch_workspace!
-export allocate_tensor_from_pool, return_tensor_to_pool!, get_memory_pool_statistics
-export clear_memory_pools!, optimize_batch_size, estimate_batch_memory_usage
-export create_batch_streams, select_optimal_kernel_config
+export GPUMoELayer, GPUMoEConfig
+export create_gpu_moe_config, create_gpu_moe_layer
+export gpu_moe_forward, gpu_moe_forward_batch
 
-export GPUMoELayerConfig, GPUMoELayer, gpu_moe_forward!, create_gpu_moe_layer
-export reset_moe_layer_stats!, optimize_moe_layer!, validate_moe_layer, benchmark_moe_layer
-export get_moe_layer_stats, process_experts_parallel!
+# Export routing utilities
+export GPURoutingState, GPURoutingInfo
+export organize_token_routing!, analyze_routing_efficiency
+export validate_routing_info, get_routing_performance_stats
+export reset_routing_performance_stats!
 
-export GPUMoE, create_gpu_moe, convert_cpu_moe_to_gpu
-export optimize_gpu_moe!, benchmark_gpu_moe, validate_gpu_moe
-export get_gpu_moe_info, save_gpu_moe, load_gpu_moe
-export transfer_weights_cpu_to_gpu!
+# Export integration and conversion utilities
+export convert_cpu_moe_to_gpu, convert_gpu_moe_to_cpu
+export convert_cpu_expert_to_gpu, convert_gpu_expert_to_cpu
+export convert_cpu_router_to_gpu
+export prepare_gpu_input, process_gpu_output
+
+# Export configuration optimization
+export optimize_gpu_config_for_hardware
+export estimate_memory_requirements, validate_gpu_moe_config
+
+# Export device management
+export set_gpu_device_for_moe, get_optimal_gpu_device
+
+# Export performance and diagnostics
+export get_moe_performance_report, reset_moe_performance_stats!
+export diagnose_gpu_moe_setup, test_gpu_moe_performance
+export get_current_moe_statistics, update_moe_statistics!
+
+# Export workspace management
+export allocate_moe_workspace!, free_moe_workspace!
+
+# Export component creation utilities
+export create_gpu_experts, create_gpu_gating, create_gpu_switch_loss
+export create_gpu_moe_layer_from_components
 
 
 include("types.jl")
@@ -65,12 +83,10 @@ include("kernels/loss_kernels.jl")
 include("experts/gated_expert.jl")
 include("gating/topk_gating.jl")
 include("losses/switch_loss.jl")
-
-include("routing.jl")
-include("batching.jl")
-
 include("moe_layer.jl")
-
+include("routing.jl") 
 include("integration.jl")
+
+
 
 end 
