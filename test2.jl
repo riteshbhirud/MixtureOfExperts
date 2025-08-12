@@ -17,7 +17,7 @@ using Dates
 # Import your MoE modules
 include("src/cuda/CUDAMoE.jl")
 using .CUDAMoE
-import .CUDAMoE: GPURoutingState, create_gpu_moe_config, GPUTopKGatingState, create_gpu_moe_layer
+import .CUDAMoE: GPURoutingState, create_gpu_moe_config, GPUTopKGatingState, create_gpu_moe_layer,process_gpu_output,gpu_moe_forward
 
 function main()
     # Create output file with timestamp
@@ -50,6 +50,7 @@ function main()
         CUDA.reclaim()
         
         # Test configurations with REALISTIC batch sizes for 8GB GPU
+        #=
         test_configurations = [
             # Small model for 8GB GPU
             Dict(
@@ -83,7 +84,36 @@ function main()
                     (32, 64),   # 32 batch × 64 seq = 2048 tokens
                 ]
             )
+        ] =#
+         test_configurations = [
+    Dict(
+        :name => "Tiny Model (Shared Memory Test)",
+        :input_dim => 256,     # Much smaller
+        :hidden_dim => 512,    # Much smaller
+        :output_dim => 256,    # Much smaller
+        :num_experts => 4,
+        :top_k => 2,
+        :max_tokens => 256,    # Very small
+        :test_scenarios => [
+            (4, 32),    # 4 batch × 32 seq = 128 tokens
+            (8, 16),    # 8 batch × 16 seq = 128 tokens
+            (16, 16),   # 16 batch × 16 seq = 256 tokens
         ]
+    ),
+    Dict(
+        :name => "Small Model (No Shared Memory)",
+        :input_dim => 1024,
+        :hidden_dim => 2048,
+        :output_dim => 1024,
+        :num_experts => 4,
+        :top_k => 2,
+        :max_tokens => 1024,
+        :test_scenarios => [
+            (16, 32),   # 16 batch × 32 seq = 512 tokens
+            (32, 32),   # 32 batch × 32 seq = 1024 tokens
+        ]
+    )
+]
         
         # Only test larger configs if we have more memory
         if available_memory_gb >= 16
@@ -284,20 +314,10 @@ function run_forward_pass_test(moe_layer, input_dim::Int, total_tokens::Int, tra
     start_time = time_ns()
     
     if training
-        output, balance_loss, stats = gpu_moe_forward(
-            moe_layer, input; 
-            training=true, 
-            return_stats=true, 
-            return_cpu=false
-        )
+        output, balance_loss, stats = moe_layer(input; training=true, return_stats=true)
     else
-        output, stats = gpu_moe_forward(
-            moe_layer, input; 
-            training=false, 
-            return_stats=true, 
-            return_cpu=false
-        )
-        balance_loss = 0.0f0
+        output, stats = moe_layer(input; training=false, return_stats=true)
+        balance_loss = Int32(0.0)
     end
     
     CUDA.synchronize()
@@ -501,9 +521,7 @@ end
 function generate_test_report(all_results::Dict)
     """Generate a comprehensive test report"""
     
-    println("\n" * "=" * 60)
     println("COMPREHENSIVE TEST REPORT")
-    println("=" * 60)
     
     if isempty(all_results)
         println("❌ No successful test results to report")
@@ -569,9 +587,7 @@ function generate_test_report(all_results::Dict)
     end
     
     # Overall system health
-    println("\n" * "=" * 60)
     println("SYSTEM HEALTH SUMMARY")
-    println("=" * 60)
     
     total_configs = length(all_results)
     println("✅ Configurations tested: $total_configs")
@@ -618,3 +634,7 @@ catch e
 finally
     cleanup_gpu_memory()
 end
+
+
+
+

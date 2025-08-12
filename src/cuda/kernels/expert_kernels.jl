@@ -440,25 +440,24 @@ function gpu_gated_expert_backward_input_kernel!(
     return nothing
 end
 
-# High-level kernel launcher functions
 function launch_gated_expert_forward_kernel!(
-    output::AbstractMatrix{T},      # Accept SubArray
-    input::AbstractMatrix{T},       # Accept SubArray  
+    output::AbstractMatrix{T},      
+    input::AbstractMatrix{T},       
     weights::GPUGatedExpertWeights{T},
-    workspace::Dict{Symbol, Any};   # Match workspace type
+    workspace::Dict{Symbol, Any};   
     use_small_batch_optimization::Bool = false,
     shared_memory_bytes::Int = 0
 ) where T<:AbstractFloat
     
     # Convert SubArrays to concrete CuArrays for CUDA kernels
     concrete_input = if isa(input, SubArray)
-        CuArray{T}(input)  # Copy SubArray to concrete CuArray
+        CuArray{T}(input)  
     else
         input
     end
     
     concrete_output = if isa(output, SubArray)
-        CUDA.zeros(T, size(output)...)  # Create temporary concrete output
+        CUDA.zeros(T, size(output)...)  
     else
         output
     end
@@ -469,47 +468,63 @@ function launch_gated_expert_forward_kernel!(
     
     use_bias = !isnothing(weights.b1) && !isnothing(weights.b3)
     
-    # Get workspace arrays with safe type conversion
-temp_gate = if haskey(workspace, :temp_gate)
-    workspace_array = workspace[:temp_gate]
-    if isa(workspace_array, SubArray)
-        # Convert SubArray to concrete CuArray
-        CuArray{T}(workspace_array)
-    else
-        workspace_array
-    end
-else
-    CUDA.zeros(T, hidden_dim, batch_size)
-end
-
-temp_up = if haskey(workspace, :temp_up)
-    workspace_array = workspace[:temp_up]
-    if isa(workspace_array, SubArray)
-        # Convert SubArray to concrete CuArray
-        CuArray{T}(workspace_array)
-    else
-        workspace_array
-    end
-else
-    CUDA.zeros(T, hidden_dim, batch_size)
-end
+    # Calculate required shared memory for small batch optimization
+    required_shared_memory = sizeof(T) * (input_dim * batch_size + hidden_dim * batch_size)
     
-    if use_small_batch_optimization && batch_size <= 32
-        # Use shared memory optimization for small batches
-        threads = (16, min(batch_size, 16))
-        blocks = (cld(hidden_dim, 16), cld(output_dim, 16))
+    # Use hardcoded limit for RTX 4060 (99KB opt-in limit from your debug output)
+    max_shared_memory = 101376  # 99KB in bytes
+    safe_shared_memory_limit = (max_shared_memory * 7) ÷ 10  # 70KB safe limit
+    
+    # BE VERY CONSERVATIVE: Only use shared memory for tiny inputs
+    can_use_shared_memory = (use_small_batch_optimization && 
+                            batch_size <= 8 &&  
+                            input_dim <= 512 &&  
+                            hidden_dim <= 1024 && 
+                            required_shared_memory <= safe_shared_memory_limit)
+    
+    if can_use_shared_memory
+        println("Using shared memory optimization: $(required_shared_memory ÷ 1024)KB / $(safe_shared_memory_limit ÷ 1024)KB")
+    end
+    
+    # Get workspace arrays with safe type conversion
+    temp_gate = if haskey(workspace, :temp_gate)
+        workspace_array = workspace[:temp_gate]
+        if isa(workspace_array, SubArray)
+            CuArray{T}(workspace_array)
+        else
+            workspace_array
+        end
+    else
+        CUDA.zeros(T, hidden_dim, batch_size)
+    end
+
+    temp_up = if haskey(workspace, :temp_up)
+        workspace_array = workspace[:temp_up]
+        if isa(workspace_array, SubArray)
+            CuArray{T}(workspace_array)
+        else
+            workspace_array
+        end
+    else
+        CUDA.zeros(T, hidden_dim, batch_size)
+    end
+    
+    if can_use_shared_memory
+        # Use shared memory optimization for very small inputs only
+        threads = (8, min(batch_size, 4))  
+        blocks = (cld(hidden_dim, 8), cld(output_dim, 8))
         
-        shared_mem_size = sizeof(T) * (input_dim * batch_size + hidden_dim * batch_size)
-        
-        @cuda threads=threads blocks=blocks shmem=shared_mem_size gpu_gated_expert_forward_small_batch_kernel!(
+        @cuda threads=threads blocks=blocks shmem=required_shared_memory gpu_gated_expert_forward_small_batch_kernel!(
             concrete_output, concrete_input, weights.w1, weights.w2, weights.w3,
             weights.b1, weights.b3,
             input_dim, hidden_dim, output_dim, batch_size, use_bias
         )
         
-    elseif batch_size >= 128
-        # Use large batch optimization
-        # Phase 1: Compute gate and up projections
+    elseif batch_size >= 32  
+        # Use multi-phase approach for larger batches
+        println("Using multi-phase kernel for batch_size=$batch_size")
+        
+        # Phase 1: Gate and up projections
         threads = (16, 16)
         blocks = (cld(batch_size, 16), cld(hidden_dim, 16))
         
@@ -538,7 +553,9 @@ end
         )
         
     else
-        # Use general kernel for medium batch sizes
+        # Use simple single-phase kernel (no shared memory) - SAFEST OPTION
+        println("Using simple kernel for batch_size=$batch_size")
+        
         threads = (16, 16)
         blocks = (cld(hidden_dim, 16), cld(batch_size, 16))
         
@@ -558,6 +575,7 @@ end
     return output
 end
 # Kernel launcher for backward pass
+# Kernel launcher for backward pass
 function launch_gated_expert_backward_kernel!(
     grad_weights::GPUGatedExpertWeights{T},
     grad_input::AbstractMatrix{T},     # Accept SubArray
@@ -567,16 +585,45 @@ function launch_gated_expert_backward_kernel!(
     forward_workspace::Dict{Symbol, Any}  # Match workspace type
 ) where T<:AbstractFloat
     
-    input_dim, batch_size = size(input)
+    # Convert SubArrays to concrete CuArrays for CUDA kernels
+    concrete_input = if isa(input, SubArray)
+        CuArray{T}(input)
+    else
+        input
+    end
+    
+    concrete_grad_output = if isa(grad_output, SubArray)
+        CuArray{T}(grad_output)
+    else
+        grad_output
+    end
+    
+    concrete_grad_input = if isa(grad_input, SubArray)
+        CUDA.zeros(T, size(grad_input)...)  # Create temporary for output
+    else
+        grad_input
+    end
+    
+    input_dim, batch_size = size(concrete_input)
     hidden_dim = size(weights.w1, 2)
     output_dim = size(weights.w2, 2)
     
     use_bias = !isnothing(weights.b1) && !isnothing(weights.b3)
     
-    # Get intermediate values from forward pass
+    # Validate that required workspace arrays exist
+    if !haskey(forward_workspace, :temp_gate) || !haskey(forward_workspace, :temp_up) || !haskey(forward_workspace, :gated_values)
+        error("Required forward pass intermediate values not found in workspace. Make sure forward pass was called with training=true or return_intermediates=true")
+    end
+    
+    # Get intermediate values from forward pass (handle SubArrays)
     gate_values = forward_workspace[:temp_gate]
-    up_values = forward_workspace[:temp_up]
+    up_values = forward_workspace[:temp_up] 
     gated_values = forward_workspace[:gated_values]
+    
+    # Convert workspace arrays to concrete if needed
+    gate_values = isa(gate_values, SubArray) ? CuArray{T}(gate_values) : gate_values
+    up_values = isa(up_values, SubArray) ? CuArray{T}(up_values) : up_values
+    gated_values = isa(gated_values, SubArray) ? CuArray{T}(gated_values) : gated_values
     
     # Allocate gradient workspace
     grad_gated = CUDA.zeros(T, hidden_dim, batch_size)
@@ -588,7 +635,7 @@ function launch_gated_expert_backward_kernel!(
     blocks = (cld(hidden_dim, 16), cld(output_dim, 16))
     
     @cuda threads=threads blocks=blocks gpu_gated_expert_backward_output_kernel!(
-        grad_weights.w2, grad_weights.b2, grad_gated, grad_output,
+        grad_weights.w2, grad_weights.b2, grad_gated, concrete_grad_output,
         gated_values, weights.w2, hidden_dim, output_dim, batch_size, use_bias
     )
     
@@ -605,9 +652,14 @@ function launch_gated_expert_backward_kernel!(
     
     @cuda threads=threads blocks=blocks gpu_gated_expert_backward_input_kernel!(
         grad_weights.w1, grad_weights.w3, grad_weights.b1, grad_weights.b3,
-        grad_input, grad_gate, grad_up, input, weights.w1, weights.w3,
+        concrete_grad_input, grad_gate, grad_up, concrete_input, weights.w1, weights.w3,
         input_dim, hidden_dim, batch_size, use_bias
     )
+    
+    # Copy result back to original grad_input if it was a SubArray
+    if isa(grad_input, SubArray)
+        copyto!(grad_input, concrete_grad_input)
+    end
     
     CUDA.synchronize()
     return grad_weights, grad_input

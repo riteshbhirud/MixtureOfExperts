@@ -33,9 +33,14 @@ function GPUDeviceInfo()
     dev   = CUDA.device()
     attrs = _device_attributes(dev)
 
-    # Use OPTIN shared memory if available (some GPUs expose a larger limit there)
-    shmem = get(attrs, CUDA.CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK,
-                get(attrs, CUDA.CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, 0))
+    # Use the opt-in shared memory limit which is higher (99KB vs 48KB)
+    max_shared_standard = get(attrs, CUDA.CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK, 0)
+    max_shared_optin = get(attrs, CUDA.CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, 0)
+    
+    # Use the opt-in limit for modern GPUs like RTX 4060
+    shmem = max_shared_optin > 0 ? max_shared_optin : max_shared_standard
+    
+    println("Using shared memory limit: $(shmem ÷ 1024)KB (opt-in: $(max_shared_optin ÷ 1024)KB, standard: $(max_shared_standard ÷ 1024)KB)")
 
     # Build tuples (convert Int32 -> Int to match your field types)
     max_grid = (
@@ -53,12 +58,12 @@ function GPUDeviceInfo()
     return GPUDeviceInfo(
         Int(CUDA.deviceid(dev)),
         CUDA.name(dev),
-        CUDA.capability(dev),                          # VersionNumber
-        Int64(CUDA.totalmem(dev)),                     # bytes
+        CUDA.capability(dev),                          
+        Int64(CUDA.totalmem(dev)),                     
         Int(attrs[CUDA.CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT]),
         Int(attrs[CUDA.CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK]),
         Int(attrs[CUDA.CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR]),
-        Int(shmem),
+        Int(shmem),  # Now uses the 99KB opt-in limit
         Int(attrs[CUDA.CU_DEVICE_ATTRIBUTE_WARP_SIZE]),
         max_grid,
         max_block,

@@ -513,18 +513,30 @@ function launch_router_softmax_kernel!(
     
     num_experts, batch_size = size(router_logits)
     
-    if use_shared_memory && num_experts <= 256
-        # Use shared memory optimization for small expert counts
-        threads = min(num_experts, 256)
+    # Calculate shared memory requirements
+    required_shared_memory = sizeof(T) * num_experts
+    device_info = CUDAMoE.gpu_device_info()  # Use full module name
+    max_shared_memory = device_info.max_shared_memory_per_block
+    safe_limit = (max_shared_memory * 8) ÷ 10 
+    
+    # Be very conservative with shared memory
+    can_use_shared = (use_shared_memory && 
+                     num_experts <= 64 &&  # Much smaller limit
+                     batch_size <= 64 &&   # Small batch limit
+                     required_shared_memory <= safe_limit)
+    
+    if can_use_shared
+        @info "Using shared memory for softmax: $(required_shared_memory ÷ 1024)KB"
+        threads = min(num_experts, 64)
         blocks = batch_size
-        shared_mem_size = sizeof(T) * num_experts
         
-        @cuda threads=threads blocks=blocks shmem=shared_mem_size gpu_router_softmax_shared_kernel!(
+        @cuda threads=threads blocks=blocks shmem=required_shared_memory gpu_router_softmax_shared_kernel!(
             router_probs, router_logits, num_experts, batch_size, epsilon
         )
         
     else
-        # Use general softmax kernel
+        # Use general softmax kernel (no shared memory) - this should always work
+        @debug "Using standard softmax (no shared memory)"
         max_logits = CUDA.zeros(T, batch_size)
         sum_exp = CUDA.zeros(T, batch_size)
         
