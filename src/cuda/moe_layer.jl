@@ -7,7 +7,7 @@ This is the main orchestrating component that ties all GPU MoE components togeth
 """
 
 # Main GPU MoE Layer structure
-struct GPUMoELayer{T<:AbstractFloat}
+mutable struct GPUMoELayer{T<:AbstractFloat}
     # Core components
     experts::Vector{GPUGatedExpert{T}}
     gating::GPUTopKGating{T}
@@ -17,7 +17,7 @@ struct GPUMoELayer{T<:AbstractFloat}
     config::GPUMoEConfig{T}
     
     # Workspace management
-    workspace::Dict{Symbol, CuArray}
+    workspace::Dict{Symbol, Any}
     workspace_allocated::Ref{Bool}
     workspace_size_bytes::Ref{Int64}
     
@@ -62,7 +62,7 @@ struct GPUMoELayer{T<:AbstractFloat}
         load_balance_loss = create_gpu_switch_loss(config)
         
         # Initialize workspace management
-        workspace = Dict{Symbol, CuArray}()
+        workspace = Dict{Symbol, Any}()
         workspace_allocated = Ref(false)
         workspace_size_bytes = Ref(Int64(0))
         
@@ -141,7 +141,7 @@ function (moe_layer::GPUMoELayer{T})(
             output = workspace[:main_output]
         end
         output_view = view(output, :, 1:batch_size)
-        fill!(output_view, T(0))  # Initialize to zero
+        CUDA.fill!(output_view, zero(T))
         
         # Phase 1: TopK Gating - Route tokens to experts
         routing_start = time()
@@ -263,7 +263,7 @@ function allocate_moe_workspace!(moe_layer::GPUMoELayer{T}, batch_size::Int) whe
     workspace[:expert_gates] = gpu_zeros(T, top_k, batch_size; aligned=true)
     
     # Expert computation workspace
-    max_tokens_per_expert = batch_size  # Worst case: all tokens go to one expert
+    max_tokens_per_expert = top_k * batch_size  # Worst case: all tokens go to one expert
     workspace[:expert_inputs] = gpu_zeros(T, input_dim, max_tokens_per_expert; aligned=true)
     workspace[:expert_outputs] = gpu_zeros(T, output_dim, max_tokens_per_expert; aligned=true)
     
@@ -308,11 +308,11 @@ end
 
 # Parallel expert computation - core GPU acceleration
 function compute_experts_parallel!(
-    output::CuMatrix{T},
+    output::AbstractMatrix{T},
     input::CuMatrix{T},
     experts::Vector{GPUGatedExpert{T}},
     routing_info::GPURoutingInfo{T},
-    workspace::Dict{Symbol, CuArray}
+    workspace::Dict{Symbol, Any}
 ) where T<:AbstractFloat
     
     # Process all experts that have assigned tokens
@@ -342,18 +342,21 @@ function compute_experts_parallel!(
         assigned_token_indices = routing_info.sorted_token_indices[start_idx:end_idx]
         assigned_weights = routing_info.sorted_gating_weights[start_idx:end_idx]
         
-        # Extract input for this expert
-        expert_input = workspace[:expert_inputs][:, 1:token_count]
-        extract_tokens_for_expert!(expert_input, input, assigned_token_indices)
+        # Extract input for this expert - with type-safe workspace access
+        expert_input = workspace[:expert_inputs]::AbstractMatrix{T}
+        expert_input_view = view(expert_input, :, 1:token_count)
+        extract_tokens_for_expert!(expert_input_view, input, assigned_token_indices)
         
         # Run expert forward pass
-        expert_output = workspace[:expert_outputs][:, 1:token_count]
-        gpu_gated_expert_forward!(expert_output, expert_input, experts[expert_id])
+        expert_output = workspace[:expert_outputs]::AbstractMatrix{T}
+
+        expert_output_view = view(expert_output, :, 1:token_count)
+        gpu_gated_expert_forward!(expert_output_view, expert_input_view, experts[expert_id])
         
         # Apply gating weights and accumulate to output
         apply_gating_weights_and_accumulate!(
             output,
-            expert_output,
+            expert_output_view,
             assigned_token_indices,
             assigned_weights
         )
@@ -364,11 +367,11 @@ end
 
 # Sequential expert computation (fallback)
 function compute_experts_sequential!(
-    output::CuMatrix{T},
+    output::AbstractMatrix{T},               # NEW: Accepts SubArray and CuArray
     input::CuMatrix{T},
-    experts::Vector{GPUGatedExpert{T}},
+    experts::Vector{GPUGatedExpert{T}},      # NEW: More natural Vector type
     routing_info::GPURoutingInfo{T},
-    workspace::Dict{Symbol, CuArray}
+    workspace::Dict{Symbol, Any}            # NEW: Matches our workspace type
 ) where T<:AbstractFloat
     
     # This is essentially the same as parallel but processes experts one by one
@@ -380,7 +383,7 @@ end
 
 # Token extraction for expert computation
 function extract_tokens_for_expert!(
-    expert_input::CuMatrix{T},
+    expert_input::AbstractMatrix{T},
     full_input::CuMatrix{T},
     token_indices::CuVector{Int32}
 ) where T<:AbstractFloat
@@ -396,15 +399,30 @@ function extract_tokens_for_expert!(
         throw(DimensionMismatch("Expert batch size must match number of token indices"))
     end
     
-    # Launch CUDA kernel to extract tokens
+    # Handle SubArray by creating a concrete CuArray for the kernel
+    concrete_expert_input = if isa(expert_input, SubArray)
+        # Create a temporary CuArray with the same size
+        temp_array = CUDA.zeros(T, input_dim, expert_batch_size)
+        temp_array
+    else
+        expert_input
+    end
+    
+    # Launch CUDA kernel with concrete CuArray
     total_elements = input_dim * expert_batch_size
     kernel_config = GPUKernelConfig(total_elements)
     
     @cuda threads=kernel_config.threads_per_block blocks=kernel_config.blocks_per_grid extract_tokens_kernel!(
-        expert_input, full_input, token_indices, input_dim, expert_batch_size
+        concrete_expert_input, full_input, token_indices, input_dim, expert_batch_size
     )
     
     CUDA.synchronize()
+    
+    # Copy result back to original expert_input if it was a SubArray
+    if isa(expert_input, SubArray)
+        copyto!(expert_input, concrete_expert_input)
+    end
+    
     return expert_input
 end
 
@@ -437,15 +455,33 @@ function extract_tokens_kernel!(
 end
 
 # Apply gating weights and accumulate to output
+# Replace the entire function with this updated version:
 function apply_gating_weights_and_accumulate!(
-    output::CuMatrix{T},
-    expert_output::CuMatrix{T},
+    output::AbstractMatrix{T},
+    expert_output::AbstractMatrix{T},
     token_indices::CuVector{Int32},
     gating_weights::CuVector{T}
 ) where T<:AbstractFloat
     
-    output_dim, expert_batch_size = size(expert_output)
-    total_output_dim, total_batch_size = size(output)
+    # Convert SubArrays to concrete CuArrays for CUDA kernel
+    concrete_output = if isa(output, SubArray)
+        # For output, we need to preserve the original for accumulation
+        # Create a temporary copy, then add back to original
+        temp_output = CUDA.zeros(T, size(output)...)
+        copyto!(temp_output, output)  # Copy current values
+        temp_output
+    else
+        output
+    end
+    
+    concrete_expert_output = if isa(expert_output, SubArray)
+        CuArray{T}(expert_output)  # Copy to concrete array
+    else
+        expert_output
+    end
+    
+    output_dim, expert_batch_size = size(concrete_expert_output)
+    total_output_dim, total_batch_size = size(concrete_output)
     
     if output_dim != total_output_dim
         throw(DimensionMismatch("Output dimensions must match"))
@@ -455,15 +491,21 @@ function apply_gating_weights_and_accumulate!(
         throw(DimensionMismatch("Batch sizes must match"))
     end
     
-    # Launch CUDA kernel to apply weights and accumulate
+    # Launch CUDA kernel with concrete arrays
     total_elements = output_dim * expert_batch_size
     kernel_config = GPUKernelConfig(total_elements)
     
     @cuda threads=kernel_config.threads_per_block blocks=kernel_config.blocks_per_grid accumulate_weighted_outputs_kernel!(
-        output, expert_output, token_indices, gating_weights, output_dim, expert_batch_size
+        concrete_output, concrete_expert_output, token_indices, gating_weights, output_dim, expert_batch_size
     )
     
     CUDA.synchronize()
+    
+    # Copy result back to original output if it was a SubArray
+    if isa(output, SubArray)
+        copyto!(output, concrete_output)
+    end
+    
     return output
 end
 
@@ -533,7 +575,7 @@ function update_moe_statistics!(
     # Store load balance score
     if balance_loss > 0
         # Compute load balance score from expert usage
-        ideal_usage = 1.0f0 / moe_layer.config.num_experts
+        ideal_usage =  1.0f0/ moe_layer.config.num_experts
         variance = sum((expert_usage .- ideal_usage).^2) / moe_layer.config.num_experts
         balance_score = 1.0f0 - sqrt(variance) / ideal_usage
         push!(stats[:load_balance_scores], balance_score)

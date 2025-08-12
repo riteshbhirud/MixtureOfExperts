@@ -80,8 +80,10 @@ function GPUMemoryInfo()
     if !CUDA.functional()
         throw(ErrorException("CUDA not functional"))
     end
+    dev = CUDA.device()
+
     
-    total = 6000
+    total = CUDA.totalmem(dev)
     available = CUDA.available_memory()
     used = total - available
     

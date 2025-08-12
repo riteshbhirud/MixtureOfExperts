@@ -442,23 +442,57 @@ end
 
 # High-level kernel launcher functions
 function launch_gated_expert_forward_kernel!(
-    output::CuMatrix{T},
-    input::CuMatrix{T},
+    output::AbstractMatrix{T},      # Accept SubArray
+    input::AbstractMatrix{T},       # Accept SubArray  
     weights::GPUGatedExpertWeights{T},
-    workspace::Dict{Symbol, CuArray};
+    workspace::Dict{Symbol, Any};   # Match workspace type
     use_small_batch_optimization::Bool = false,
     shared_memory_bytes::Int = 0
 ) where T<:AbstractFloat
     
-    input_dim, batch_size = size(input)
+    # Convert SubArrays to concrete CuArrays for CUDA kernels
+    concrete_input = if isa(input, SubArray)
+        CuArray{T}(input)  # Copy SubArray to concrete CuArray
+    else
+        input
+    end
+    
+    concrete_output = if isa(output, SubArray)
+        CUDA.zeros(T, size(output)...)  # Create temporary concrete output
+    else
+        output
+    end
+    
+    input_dim, batch_size = size(concrete_input)
     hidden_dim = size(weights.w1, 2)
     output_dim = size(weights.w2, 2)
     
     use_bias = !isnothing(weights.b1) && !isnothing(weights.b3)
     
-    # Get workspace arrays
-    temp_gate = get(workspace, :temp_gate, CUDA.zeros(T, hidden_dim, batch_size))
-    temp_up = get(workspace, :temp_up, CUDA.zeros(T, hidden_dim, batch_size))
+    # Get workspace arrays with safe type conversion
+temp_gate = if haskey(workspace, :temp_gate)
+    workspace_array = workspace[:temp_gate]
+    if isa(workspace_array, SubArray)
+        # Convert SubArray to concrete CuArray
+        CuArray{T}(workspace_array)
+    else
+        workspace_array
+    end
+else
+    CUDA.zeros(T, hidden_dim, batch_size)
+end
+
+temp_up = if haskey(workspace, :temp_up)
+    workspace_array = workspace[:temp_up]
+    if isa(workspace_array, SubArray)
+        # Convert SubArray to concrete CuArray
+        CuArray{T}(workspace_array)
+    else
+        workspace_array
+    end
+else
+    CUDA.zeros(T, hidden_dim, batch_size)
+end
     
     if use_small_batch_optimization && batch_size <= 32
         # Use shared memory optimization for small batches
@@ -468,7 +502,7 @@ function launch_gated_expert_forward_kernel!(
         shared_mem_size = sizeof(T) * (input_dim * batch_size + hidden_dim * batch_size)
         
         @cuda threads=threads blocks=blocks shmem=shared_mem_size gpu_gated_expert_forward_small_batch_kernel!(
-            output, input, weights.w1, weights.w2, weights.w3,
+            concrete_output, concrete_input, weights.w1, weights.w2, weights.w3,
             weights.b1, weights.b3,
             input_dim, hidden_dim, output_dim, batch_size, use_bias
         )
@@ -480,7 +514,7 @@ function launch_gated_expert_forward_kernel!(
         blocks = (cld(batch_size, 16), cld(hidden_dim, 16))
         
         @cuda threads=threads blocks=blocks gpu_gated_expert_forward_large_batch_kernel!(
-            output, input, weights.w1, weights.w2, weights.w3,
+            concrete_output, concrete_input, weights.w1, weights.w2, weights.w3,
             weights.b1, weights.b3, temp_gate, temp_up,
             input_dim, hidden_dim, output_dim, batch_size, use_bias
         )
@@ -499,7 +533,7 @@ function launch_gated_expert_forward_kernel!(
         blocks = (cld(batch_size, 16), cld(output_dim, 16))
         
         @cuda threads=threads blocks=blocks gpu_output_projection_kernel!(
-            output, temp_gate, weights.w2, weights.b2,
+            concrete_output, temp_gate, weights.w2, weights.b2,
             hidden_dim, output_dim, batch_size, !isnothing(weights.b2)
         )
         
@@ -509,24 +543,28 @@ function launch_gated_expert_forward_kernel!(
         blocks = (cld(hidden_dim, 16), cld(batch_size, 16))
         
         @cuda threads=threads blocks=blocks gpu_gated_expert_forward_kernel!(
-            output, input, weights.w1, weights.w2, weights.w3,
+            concrete_output, concrete_input, weights.w1, weights.w2, weights.w3,
             weights.b1, weights.b3, temp_gate, temp_up,
             input_dim, hidden_dim, output_dim, batch_size, use_bias
         )
     end
     
+    # Copy result back to original output if it was a SubArray
+    if isa(output, SubArray)
+        copyto!(output, concrete_output)
+    end
+    
     CUDA.synchronize()
     return output
 end
-
 # Kernel launcher for backward pass
 function launch_gated_expert_backward_kernel!(
     grad_weights::GPUGatedExpertWeights{T},
-    grad_input::CuMatrix{T},
-    grad_output::CuMatrix{T},
-    input::CuMatrix{T},
+    grad_input::AbstractMatrix{T},     # Accept SubArray
+    grad_output::AbstractMatrix{T},    # Accept SubArray
+    input::AbstractMatrix{T},          # Accept SubArray
     weights::GPUGatedExpertWeights{T},
-    forward_workspace::Dict{Symbol, CuArray}
+    forward_workspace::Dict{Symbol, Any}  # Match workspace type
 ) where T<:AbstractFloat
     
     input_dim, batch_size = size(input)

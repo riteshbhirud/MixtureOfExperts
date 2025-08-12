@@ -7,7 +7,7 @@ computation, and parallel reduction operations.
 """
 
 # Main GPU Switch Transformer Loss structure
-struct GPUSwitchTransformerLoss{T<:AbstractFloat}
+mutable struct GPUSwitchTransformerLoss{T<:AbstractFloat}
     alpha::T                              # Loss scaling factor
     config::GPUMoEConfig{T}
     

@@ -83,8 +83,9 @@ include("kernels/loss_kernels.jl")
 include("experts/gated_expert.jl")
 include("gating/topk_gating.jl")
 include("losses/switch_loss.jl")
-include("moe_layer.jl")
+
 include("routing.jl") 
+include("moe_layer.jl")
 include("integration.jl")
 
 

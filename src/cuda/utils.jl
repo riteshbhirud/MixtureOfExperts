@@ -637,7 +637,7 @@ function gpu_clamp_kernel!(output::CuDeviceArray{T}, input::CuDeviceArray{T},
 end
 
 # Check for numerical issues
-function gpu_check_finite(input::CuArray{T}) where T<:AbstractFloat
+function gpu_check_finite(input::AbstractArray{T}) where T<:AbstractFloat
     # Use CUDA reduction to check if all elements are finite
     finite_count = CUDA.reduce(+, isfinite.(input))
     total_count = length(input)

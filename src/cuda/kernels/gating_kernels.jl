@@ -485,10 +485,20 @@ function launch_router_computation_kernel!(
     threads = (16, 16)
     blocks = (cld(num_experts, 16), cld(batch_size, 16))
     
-    @cuda threads=threads blocks=blocks gpu_router_logits_kernel!(
-        router_logits, input, router_weights, router_bias,
-        input_dim, num_experts, batch_size, use_bias
-    )
+    if use_bias
+        # Call kernel with bias
+        @cuda threads=threads blocks=blocks gpu_router_logits_kernel!(
+            router_logits, input, router_weights, router_bias,
+            input_dim, num_experts, batch_size, use_bias
+        )
+    else
+        # Call kernel without bias (create dummy bias vector)
+        dummy_bias = CUDA.zeros(T, num_experts)
+        @cuda threads=threads blocks=blocks gpu_router_logits_kernel!(
+            router_logits, input, router_weights, dummy_bias,
+            input_dim, num_experts, batch_size, use_bias
+        )
+    end
     
     CUDA.synchronize()
     return router_logits

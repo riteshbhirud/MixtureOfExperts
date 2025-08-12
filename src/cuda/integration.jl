@@ -19,7 +19,7 @@ function create_gpu_moe_config(;
     enable_kernel_fusion::Bool = true,
     memory_alignment::Int = 32,
     preferred_block_size::Int = 256,
-    epsilon::Float32 = 1e-6f0,
+    epsilon::Float32 = Float32(1e-6),
     device_id::Union{Int, Nothing} = nothing
 )
     # Set GPU device if specified
@@ -58,8 +58,8 @@ function create_gpu_moe_layer(
     num_experts::Int = 8,
     top_k::Int = 2,
     max_batch_size::Int = 512,
-    initialization_scale::Float32 = 0.02f0,
-    alpha::Float32 = 0.01f0,
+    initialization_scale::Float32 = Float32(0.02),
+    alpha::Float32 = Float32(0.01),
     use_half_precision::Bool = false,
     enable_expert_parallelism::Bool = true,
     use_dynamic_batching::Bool = true,
@@ -103,8 +103,8 @@ function create_gpu_moe_layer(config_dict::Dict{Symbol, Any})
         num_experts = get(config_dict, :num_experts, 8),
         top_k = get(config_dict, :top_k, 2),
         max_batch_size = get(config_dict, :max_batch_size, 512),
-        initialization_scale = get(config_dict, :initialization_scale, 0.02f0),
-        alpha = get(config_dict, :alpha, 0.01f0),
+        initialization_scale = get(config_dict, :initialization_scale, Float32(0.02)),
+        alpha = get(config_dict, :alpha, Float32(0.01)),
         use_half_precision = get(config_dict, :use_half_precision, false),
         enable_expert_parallelism = get(config_dict, :enable_expert_parallelism, true),
         use_dynamic_batching = get(config_dict, :use_dynamic_batching, true),

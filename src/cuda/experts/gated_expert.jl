@@ -7,7 +7,7 @@ backward passes with automatic kernel selection based on problem size.
 """
 
 # Main GPU Gated Expert structure
-struct GPUGatedExpert{T<:AbstractFloat}
+mutable struct GPUGatedExpert{T<:AbstractFloat}
     weights::GPUGatedExpertWeights{T}
     config::GPUMoEConfig{T}
     
@@ -47,7 +47,7 @@ struct GPUGatedExpert{T<:AbstractFloat}
         end
         
         # Initialize workspace management
-        workspace = Dict{Symbol, CuArray}()
+        workspace = Dict{Symbol, Any}()
         workspace_allocated = Ref(false)
         workspace_size_bytes = Ref(Int64(0))
         
@@ -120,7 +120,7 @@ function allocate_workspace!(expert::GPUGatedExpert{T}, batch_size::Int) where T
     output_dim = config.output_dim
     
     # Allocate workspace arrays
-    workspace = Dict{Symbol, CuArray}()
+    workspace = Dict{Symbol, Any}()
     
     # Intermediate computation buffers
     workspace[:temp_gate] = gpu_zeros(T, hidden_dim, batch_size; aligned=true)
@@ -177,8 +177,8 @@ end
 
 # Forward pass implementation
 function gpu_gated_expert_forward!(
-    output::CuMatrix{T},
-    input::CuMatrix{T},
+    output::AbstractMatrix{T},    # Accept SubArray
+    input::AbstractMatrix{T},     # Accept SubArray
     expert::GPUGatedExpert{T};
     training::Bool = false,
     return_intermediates::Bool = false
@@ -242,8 +242,8 @@ end
 
 # Multi-phase forward pass for better memory control
 function gpu_gated_expert_forward_phases!(
-    output::CuMatrix{T},
-    input::CuMatrix{T},
+    output::AbstractMatrix{T},   # Accept SubArray
+    input::AbstractMatrix{T},    # Accept SubArray  
     expert::GPUGatedExpert{T},
     workspace::Dict{Symbol, Any}
 ) where T<:AbstractFloat
@@ -389,7 +389,7 @@ function gpu_gated_expert_backward!(
     return grad_input
 end
 
-function allocate_gradient_workspace!(expert::GPUGatedExpert{T}, workspace::Dict{Symbol, CuArray}) where T
+function allocate_gradient_workspace!(expert::GPUGatedExpert{T}, workspace::Dict{Symbol, Any}) where T
     config = expert.config
     weights = expert.weights
     
@@ -412,7 +412,7 @@ function allocate_gradient_workspace!(expert::GPUGatedExpert{T}, workspace::Dict
     workspace[:grad_weights_allocated] = true
 end
 
-function create_gradient_weights_structure(expert::GPUGatedExpert{T}, workspace::Dict{Symbol, CuArray}) where T
+function create_gradient_weights_structure(expert::GPUGatedExpert{T}, workspace::Dict{Symbol, Any}) where T
     weights = expert.weights
     
     grad_b1 = haskey(workspace, :grad_b1) ? workspace[:grad_b1] : nothing
