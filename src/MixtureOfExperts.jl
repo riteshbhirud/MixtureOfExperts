@@ -90,4 +90,35 @@ else
     @warn "Llama2 package not found. Llama2 integration features will not be available. Install Llama2.jl to enable full functionality."
 end
 
+export CudaMoEConfig, CudaMoELayer, CudaRouter, CudaStandardExpert, CudaGatedExpert
+export create_cuda_moe, cuda_moe_forward!
+export to_cuda, to_cpu, get_cuda_expert_stats
+export generate_realistic_input, quick_test, run_comprehensive_benchmark
+export REALISTIC_CONFIGS, BATCH_SCENARIOS
+
+const CUDA_AVAILABLE = try
+    import CUDA
+    CUDA.functional()
+catch
+    false
+end
+
+if CUDA_AVAILABLE
+    import CUDA
+    import NNlib
+    
+    export cuda_router_forward!, cuda_standard_expert_forward!, cuda_gated_expert_forward!
+    export cuda_process_experts!, cuda_compute_balance_loss
+    
+    include("cuda/kernels.jl")
+    include("cuda/types.jl")
+    include("cuda/router.jl")
+    include("cuda/experts.jl")
+    include("cuda/layer.jl")
+    include("cuda/utils.jl")
+    include("cuda/configs.jl")
+    include("cuda/benchmarks.jl")
+else
+    @warn "CUDA not available. GPU acceleration features will not be available. Install CUDA.jl and ensure GPU drivers are properly installed to enable GPU acceleration."
+end
 end 

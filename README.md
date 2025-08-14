@@ -339,3 +339,56 @@ This library implements techniques from:
 - **Stanford CS336** (2024): Mathematical formulations and routing algorithms
 - **Expert Choice Routing** (Zhou et al., 2022): Alternative routing paradigm
 - **CUR Decomposition**: Memory-efficient expert compression
+
+### GPU Acceleration (CUDA)
+
+The library provides full GPU acceleration using CUDA for significantly improved performance on NVIDIA GPUs.
+
+#### Quick Start
+
+```julia
+using MixtureOfExperts
+
+gpu_moe = create_cuda_moe(
+    num_experts = 8,
+    expert_type = :gated,
+    input_dim = 768,
+    hidden_dim = 3072,
+    output_dim = 768,
+    top_k = 2
+)
+
+gpu_input = CUDA.randn(Float32, 768, 32)  
+gpu_output, balance_loss = cuda_moe_forward!(gpu_moe, gpu_input; training=true)
+
+cpu_moe, gpu_moe, sync_success = create_synchronized_moe_pair(
+    CudaMoEConfig(
+        num_experts = 8,
+        expert_type = :gated,
+        input_dim = 768,
+        hidden_dim = 3072,
+        output_dim = 768,
+        top_k = 2
+    )
+)
+
+gpu_tensor = to_cuda(cpu_tensor)
+cpu_tensor = to_cpu(gpu_tensor)
+
+expert_counts, usage_percentages = get_cuda_expert_stats(expert_indices, num_experts)
+
+test_input = generate_realistic_input(input_dim=768, batch_size=32)
+config = CudaMoEConfig(
+    num_experts = 16,
+    expert_type = :gated,          
+    input_dim = 1024,
+    hidden_dim = 4096,
+    output_dim = 1024,
+    top_k = 2,
+    noise_scale = 0.0f0,           
+    use_noise_network = false,    
+    balance_weight = 0.01f0        
+)
+
+gpu_moe = CudaMoELayer(config)
+```
