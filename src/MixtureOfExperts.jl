@@ -116,9 +116,41 @@ if CUDA_AVAILABLE
     include("cuda/experts.jl")
     include("cuda/layer.jl")
     include("cuda/utils.jl")
-    include("cuda/configs.jl")
-    include("cuda/benchmarks.jl")
+   # include("cuda/configs.jl")
+    #include("cuda/benchmarks.jl")
 else
     @warn "CUDA not available. GPU acceleration features will not be available. Install CUDA.jl and ensure GPU drivers are properly installed to enable GPU acceleration."
+end
+
+export AMDGPUMoEConfig, AMDGPUMoELayer, AMDGPURouter, AMDGPUStandardExpert, AMDGPUGatedExpert
+export create_amdgpu_moe, amdgpu_moe_forward!
+export to_amdgpu, get_amdgpu_expert_stats
+export generate_realistic_input_amdgpu, quick_test_amdgpu, run_comprehensive_benchmark_amdgpu
+export REALISTIC_AMDGPU_CONFIGS, BATCH_SCENARIOS_AMDGPU
+
+const AMDGPU_AVAILABLE = try
+    import AMDGPU
+    AMDGPU.functional()
+catch
+    false
+end
+
+if AMDGPU_AVAILABLE
+    import AMDGPU
+    import NNlib
+    
+    export amdgpu_router_forward!, amdgpu_standard_expert_forward!, amdgpu_gated_expert_forward!
+    export amdgpu_process_experts!, amdgpu_compute_balance_loss
+    
+    include("amdgpu/kernels.jl")
+    include("amdgpu/types.jl")
+    include("amdgpu/router.jl")
+    include("amdgpu/experts.jl")
+    include("amdgpu/layer.jl")
+    include("amdgpu/utils.jl")
+  #  include("amdgpu/configs.jl")
+   # include("amdgpu/benchmarks.jl")
+else
+    @warn "AMDGPU not available. AMD GPU acceleration features will not be available. Install AMDGPU.jl and ensure AMD GPU drivers are properly installed to enable AMD GPU acceleration."
 end
 end 
