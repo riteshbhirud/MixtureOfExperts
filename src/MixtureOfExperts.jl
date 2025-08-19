@@ -154,14 +154,14 @@ else
     @warn "AMDGPU not available. AMD GPU acceleration features will not be available. Install AMDGPU.jl and ensure AMD GPU drivers are properly installed to enable AMD GPU acceleration."
 end
 
-# Flux Integration exports (add these to existing exports)
+# Flux Integration exports 
 export FluxStandardExpert, FluxGatedExpert
 export FluxRouter, FluxTopKGating, FluxSwitchGating  
 export FluxSwitchTransformerLoss, FluxZLoss
 export FluxMoELayer, FluxMoEConfig, create_flux_moe_config
 export flux_silu
 
-# Flux Integration includes (add after existing includes)
+# Flux Integration includes 
 include("flux_integration/core.jl")
 include("flux_integration/experts.jl")
 include("flux_integration/gating.jl")
