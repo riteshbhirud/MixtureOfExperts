@@ -10,7 +10,7 @@ using StatsBase
 using ChainRulesCore
 using Printf
 using Statistics
-
+import Zygote
 # Core MoE exports 
 export GatingMechanism, LoadBalancingLoss, Expert
 export MoEConfig, MoELayer, Router
@@ -153,4 +153,19 @@ if AMDGPU_AVAILABLE
 else
     @warn "AMDGPU not available. AMD GPU acceleration features will not be available. Install AMDGPU.jl and ensure AMD GPU drivers are properly installed to enable AMD GPU acceleration."
 end
+
+# Flux Integration exports (add these to existing exports)
+export FluxStandardExpert, FluxGatedExpert
+export FluxRouter, FluxTopKGating, FluxSwitchGating  
+export FluxSwitchTransformerLoss, FluxZLoss
+export FluxMoELayer, FluxMoEConfig, create_flux_moe_config
+export flux_silu
+
+# Flux Integration includes (add after existing includes)
+include("flux_integration/core.jl")
+include("flux_integration/experts.jl")
+include("flux_integration/gating.jl")
+include("flux_integration/router.jl")
+include("flux_integration/load_balancing.jl")
+include("flux_integration/moe_layer.jl")
 end 
