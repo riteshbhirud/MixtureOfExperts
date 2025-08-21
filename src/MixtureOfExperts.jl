@@ -154,12 +154,17 @@ else
     @warn "AMDGPU not available. AMD GPU acceleration features will not be available. Install AMDGPU.jl and ensure AMD GPU drivers are properly installed to enable AMD GPU acceleration."
 end
 
+<<<<<<< HEAD
 # Flux Integration 
+=======
+# Flux Integration exports 
+>>>>>>> a60ec13890f274ffe35bf21d97c29b8c08f95ed3
 export FluxStandardExpert, FluxGatedExpert
 export FluxRouter, FluxTopKGating, FluxSwitchGating  
 export FluxSwitchTransformerLoss, FluxZLoss
 export FluxMoELayer, FluxMoEConfig, create_flux_moe_config
 export flux_silu
+<<<<<<< HEAD
 export MoETransformerConfig, MoELayerWrapper, AuxiliaryLossCollector
 export MoETransformerModel, MoETransformerLMHeadModel
 export create_moe_transformer_model, create_moe_transformer_block
@@ -168,12 +173,20 @@ export count_moe_parameters, create_moe_training_loss, prepare_transformer_input
 export initialize_moe_transformer_weights!, propagate_training_flag
 export register_moe_wrapper!, collect_aux_losses, reset_aux_losses!
 # Flux Integration 
+=======
+
+# Flux Integration includes 
+>>>>>>> a60ec13890f274ffe35bf21d97c29b8c08f95ed3
 include("flux_integration/core.jl")
 include("flux_integration/experts.jl")
 include("flux_integration/gating.jl")
 include("flux_integration/router.jl")
 include("flux_integration/load_balancing.jl")
 include("flux_integration/moe_layer.jl")
+<<<<<<< HEAD
 include("flux_integration/transformers.jl")
 
 end 
+=======
+end 
+>>>>>>> a60ec13890f274ffe35bf21d97c29b8c08f95ed3
