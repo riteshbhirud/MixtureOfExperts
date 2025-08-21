@@ -394,7 +394,7 @@ gpu_moe = CudaMoELayer(config)
 ```
 
 
-## MoE-Transformer Integration
+## MoE-Transformer Integration (Currently supports GPT 2 only)
 
 Drop-in replacement for transformer feedforward layers with Mixture of Experts.
 
@@ -487,4 +487,5 @@ println("Parameter efficiency: $(round(params.expert_ratio * 100, digits=1))%")
 # Analyze expert usage during training
 output = model(merge(input_nt, (training = true,)))
 println("Auxiliary loss: $(output.aux_loss)")  # Shows load balancing
+
 ```
