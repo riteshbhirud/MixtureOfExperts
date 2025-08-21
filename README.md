@@ -392,3 +392,99 @@ config = CudaMoEConfig(
 
 gpu_moe = CudaMoELayer(config)
 ```
+
+
+## MoE-Transformer Integration
+
+Drop-in replacement for transformer feedforward layers with Mixture of Experts.
+
+### Quick Start
+
+```julia
+using MixtureOfExperts
+
+# Create MoE-enabled transformer
+config = moe_transformer_base_config(
+    vocab_size = 50257,
+    num_experts = 8,
+    expert_top_k = 2
+)
+model = create_moe_transformer_model(config; lm_head=true)
+
+# Use like any transformer
+input_ids = rand(1:config.vocab_size, 4, 32)  # (batch, sequence)
+input_nt = prepare_transformer_inputs(input_ids)
+output = model(input_nt)  # Returns NamedTuple with logit and aux_loss
+```
+
+# Training
+```julia
+# Setup training
+optimizer = Flux.Adam(3e-4)
+opt_state = Flux.setup(optimizer, model)
+targets = rand(1:config.vocab_size, 4, 32)
+
+# Training step with auxiliary loss
+function train_step!(model, opt_state, input_nt, targets)
+    loss, grads = Flux.withgradient(model) do m
+        output = m(merge(input_nt, (training = true,)))
+        loss_info = create_moe_training_loss(output, targets)
+        return loss_info.total_loss
+    end
+    Flux.update!(opt_state, model, grads[1])
+    return loss
+end
+
+# Train
+for epoch in 1:10
+    loss = train_step!(model, opt_state, input_nt, targets)
+    println("Epoch $epoch: Loss = $loss")
+end
+```
+
+# Different Model Sizes
+```julia
+# Small model for experiments
+small_config = moe_transformer_base_config(
+    hidden_size = 512,
+    num_experts = 4
+)
+
+# Large model for production  
+large_config = moe_transformer_large_config(
+    num_experts = 32,
+    expert_top_k = 2
+)
+
+# Custom configuration
+custom_config = MoETransformerConfig(
+    vocab_size = 32000,
+    hidden_size = 1024,
+    num_experts = 16,
+    expert_type = :gated,  # :standard or :gated
+    balance_loss_weight = 0.01f0
+)
+```
+# Inference Only
+```julia
+# Inference mode (no auxiliary loss computation)
+input_nt = prepare_transformer_inputs(input_ids)
+output = model(input_nt)  # aux_loss will be 0.0
+
+# Get predictions
+predictions = Flux.softmax(output.logit, dims=1)
+next_tokens = argmax(predictions, dims=1)
+```
+# Model Analysis
+
+```julia
+# Check model size and expert utilization
+params = count_moe_parameters(model)
+println("Total parameters: $(params.total)")
+println("Expert parameters: $(params.expert)")
+println("Parameter efficiency: $(round(params.expert_ratio * 100, digits=1))%")
+
+# Analyze expert usage during training
+output = model(merge(input_nt, (training = true,)))
+println("Auxiliary loss: $(output.aux_loss)")  # Shows load balancing
+```
