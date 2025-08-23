@@ -43,9 +43,14 @@ Base.@kwdef struct MoETransformerConfig
     moe_dropout::Float32 = Float32(0.0)
     balance_loss_weight::Float32 = Float32(0.01)
     z_loss_weight::Float32 = Float32(0.001)
+    
     router_noise_scale::Float32 = Float32(0.0)
     router_use_noise_network::Bool = false
     router_use_fp32::Bool = true
+    
+    routing_type::Symbol = :topk  # :topk or :expert_choice
+    capacity_factor::Float32 = Float32(1.25)  
+    specialization_strength::Float32 = Float32(1.0) 
     
     use_cache::Bool = true
     gradient_checkpointing::Bool = false
@@ -157,6 +162,15 @@ function create_moe_transformer_block(config::MoETransformerConfig, aux_collecto
     sa_ln = LayerNorm(config.hidden_size; eps=config.layer_norm_epsilon)
     sa_wrapped = PreNormResidual(DropoutLayer(sa, p), sa_ln)
     
+    gate_type = if config.routing_type == :expert_choice
+        FluxExpertChoiceGating(config.capacity_factor, config.specialization_strength)
+    elseif config.routing_type == :topk
+        FluxTopKGating(config.expert_top_k)
+    else
+        @warn "Unknown routing_type $(config.routing_type), defaulting to TopK"
+        FluxTopKGating(config.expert_top_k)
+    end
+    
     moe_config = FluxMoEConfig(
         num_experts = config.num_experts,
         expert_type = config.expert_type,
@@ -166,10 +180,11 @@ function create_moe_transformer_block(config::MoETransformerConfig, aux_collecto
         activation = config.hidden_act,
         expert_dropout = config.moe_dropout,
         expert_bias = true,
-        top_k = config.expert_top_k,
+        top_k = config.expert_top_k,  
         noise_scale = config.router_noise_scale,
         use_noise_network = config.router_use_noise_network,
         use_fp32_router = config.router_use_fp32,
+        custom_gate_type = gate_type,  
         balance_loss_weight = config.balance_loss_weight,
         z_loss_weight = config.z_loss_weight,
         init = (args...) -> Flux.truncated_normal(args...; std=config.initializer_range)
@@ -310,73 +325,174 @@ function create_moe_transformer_model(config::MoETransformerConfig; lm_head=true
     end
 end
 
-
 """
     moe_transformer_base_config(; kwargs...)
 
-Base MoE Transformer configuration (768d model).
+DEPRECATED: Use `moe_gpt2_base_config` instead for GPT-2 architecture.
+Legacy alias for backward compatibility.
 """
 function moe_transformer_base_config(; kwargs...)
-    return MoETransformerConfig(
-        vocab_size = 50257,
-        max_position_embeddings = 1024,
-        hidden_size = 768,
-        num_hidden_layers = 12,
-        num_attention_heads = 12,
-        intermediate_size = 3072,
-        num_experts = 8,
-        expert_top_k = 2,
-        expert_type = :gated,
-        balance_loss_weight = Float32(0.01),
-        z_loss_weight = Float32(0.001);
-        kwargs...
-    )
+    @warn "moe_transformer_base_config is deprecated. Use moe_gpt2_base_config for GPT-2 models." maxlog=1
+    return moe_gpt2_base_config(; kwargs...)
 end
 
 """
     moe_transformer_medium_config(; kwargs...)
 
-Medium MoE Transformer configuration (1024d model).
+DEPRECATED: Use `moe_gpt2_medium_config` instead for GPT-2 architecture.
+Legacy alias for backward compatibility.
 """
 function moe_transformer_medium_config(; kwargs...)
-    return MoETransformerConfig(
-        vocab_size = 50257,
-        max_position_embeddings = 1024,
-        hidden_size = 1024,
-        num_hidden_layers = 24,
-        num_attention_heads = 16,
-        intermediate_size = 4096,
-        num_experts = 16,
-        expert_top_k = 2,
-        expert_type = :gated,
-        balance_loss_weight = Float32(0.01),
-        z_loss_weight = Float32(0.001);
-        kwargs...
-    )
+    @warn "moe_transformer_medium_config is deprecated. Use moe_gpt2_medium_config for GPT-2 models." maxlog=1
+    return moe_gpt2_medium_config(; kwargs...)
 end
 
 """
     moe_transformer_large_config(; kwargs...)
 
-Large MoE Transformer configuration (1280d model).
+DEPRECATED: Use `moe_gpt2_large_config` instead for GPT-2 architecture.
+Legacy alias for backward compatibility.
 """
 function moe_transformer_large_config(; kwargs...)
-    return MoETransformerConfig(
-        vocab_size = 50257,
-        max_position_embeddings = 1024,
-        hidden_size = 1280,
-        num_hidden_layers = 36,
-        num_attention_heads = 20,
-        intermediate_size = 5120,
-        num_experts = 32,
+    @warn "moe_transformer_large_config is deprecated. Use moe_gpt2_large_config for GPT-2 models." maxlog=1
+    return moe_gpt2_large_config(; kwargs...)
+end
+
+
+"""
+    moe_gpt2_base_config(; routing_type=:topk, kwargs...)
+
+Base MoE GPT-2 configuration (768d model) with TopK routing by default.
+"""
+function moe_gpt2_base_config(; routing_type=:topk, kwargs...)
+    return MoETransformerConfig(;
+        vocab_size = 50257,  #GPT-2 vocabulary
+        max_position_embeddings = 1024,  #GPT-2 context length
+        hidden_size = 768,   #GPT-2 base hidden size
+        num_hidden_layers = 12,  #GPT-2 base layers
+        num_attention_heads = 12,  #GPT-2 base heads
+        intermediate_size = 3072,  #GPT-2 base FFN size
+        num_experts = 8,
         expert_top_k = 2,
         expert_type = :gated,
+        routing_type = routing_type,
         balance_loss_weight = Float32(0.01),
-        z_loss_weight = Float32(0.001);
+        z_loss_weight = Float32(0.001),
         kwargs...
     )
 end
 
+"""
+    moe_gpt2_medium_config(; routing_type=:topk, kwargs...)
+
+Medium MoE GPT-2 configuration (1024d model).
+"""
+function moe_gpt2_medium_config(; routing_type=:topk, kwargs...)
+    return MoETransformerConfig(;
+        vocab_size = 50257,
+        max_position_embeddings = 1024,
+        hidden_size = 1024,  #GPT-2 medium hidden size
+        num_hidden_layers = 24,  #GPT-2 medium layers
+        num_attention_heads = 16,  #GPT-2 medium heads
+        intermediate_size = 4096,  #GPT-2 medium FFN size
+        num_experts = 16,
+        expert_top_k = 2,
+        expert_type = :gated,
+        routing_type = routing_type,
+        balance_loss_weight = Float32(0.01),
+        z_loss_weight = Float32(0.001),
+        kwargs...
+    )
+end
+
+"""
+    moe_gpt2_large_config(; routing_type=:topk, kwargs...)
+
+Large MoE GPT-2 configuration (1280d model).
+"""
+function moe_gpt2_large_config(; routing_type=:topk, kwargs...)
+    return MoETransformerConfig(;
+        vocab_size = 50257,
+        max_position_embeddings = 1024,
+        hidden_size = 1280, 
+        num_hidden_layers = 36,  
+        num_attention_heads = 20,  
+        intermediate_size = 5120,  
+        num_experts = 32,
+        expert_top_k = 2,
+        expert_type = :gated,
+        routing_type = routing_type,
+        balance_loss_weight = Float32(0.01),
+        z_loss_weight = Float32(0.001),
+        kwargs...
+    )
+end
+
+"""
+    moe_gpt2_expert_choice_config(; size=:base, kwargs...)
+
+Convenience function for GPT-2 MoE with Expert Choice routing and optimized defaults.
+"""
+function moe_gpt2_expert_choice_config(; size=:base, kwargs...)
+    base_config_fn = if size == :medium
+        moe_gpt2_medium_config
+    elseif size == :large
+        moe_gpt2_large_config
+    else  # :base
+        moe_gpt2_base_config
+    end
+    
+    return base_config_fn(;
+        routing_type = :expert_choice,
+        capacity_factor = Float32(1.25),      
+        specialization_strength = Float32(1.0),  
+        balance_loss_weight = Float32(0.005),    
+        kwargs...
+    )
+end
+
+"""
+    moe_gpt2_topk_config(; size=:base, kwargs...)
+
+Convenience function for GPT-2 MoE with TopK routing (explicit, same as default).
+"""
+function moe_gpt2_topk_config(; size=:base, kwargs...)
+    base_config_fn = if size == :medium
+        moe_gpt2_medium_config
+    elseif size == :large
+        moe_gpt2_large_config
+    else  # :base
+        moe_gpt2_base_config
+    end
+    
+    return base_config_fn(;
+        routing_type = :topk,
+        balance_loss_weight = Float32(0.01),  
+        kwargs...
+    )
+end
+
+"""
+    compare_moe_gpt2_routing_configs(; size=:base, num_experts=8, kwargs...)
+
+Create both TopK and Expert Choice GPT-2 configs for comparison.
+Returns (topk_config, expert_choice_config).
+"""
+function compare_moe_gpt2_routing_configs(; size=:base, num_experts=8, kwargs...)
+    topk_config = moe_gpt2_topk_config(;
+        size = size,
+        num_experts = num_experts,
+        kwargs...
+    )
+    
+    expert_choice_config = moe_gpt2_expert_choice_config(;
+        size = size, 
+        num_experts = num_experts,
+        kwargs...
+    )
+    
+    return topk_config, expert_choice_config
+end
 
 """
     count_moe_parameters(model::Union{MoETransformerModel, MoETransformerLMHeadModel})

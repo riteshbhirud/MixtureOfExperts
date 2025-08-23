@@ -167,7 +167,11 @@ export moe_transformer_base_config, moe_transformer_medium_config, moe_transform
 export count_moe_parameters, create_moe_training_loss, prepare_transformer_inputs
 export initialize_moe_transformer_weights!, propagate_training_flag
 export register_moe_wrapper!, collect_aux_losses, reset_aux_losses!
-# Flux Integration 
+export FluxExpertChoiceGating, create_expert_choice_moe_layer
+export moe_gpt2_base_config, moe_gpt2_medium_config, moe_gpt2_large_config
+export moe_gpt2_expert_choice_config, moe_gpt2_topk_config
+export compare_moe_gpt2_routing_configs
+
 include("flux_integration/core.jl")
 include("flux_integration/experts.jl")
 include("flux_integration/gating.jl")

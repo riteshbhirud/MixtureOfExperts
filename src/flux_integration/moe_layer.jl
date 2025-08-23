@@ -18,6 +18,9 @@ Base.@kwdef struct FluxMoEConfig
     use_noise_network::Bool = false
     use_fp32_router::Bool = true
     
+    # Support for custom gate types
+    custom_gate_type::Union{Nothing, GatingMechanism} = nothing
+    
     balance_loss_weight::Float32 = 0.01f0
     z_loss_weight::Float32 = 0.001f0
     
@@ -37,20 +40,7 @@ Main Flux-compatible Mixture of Experts layer that combines router and experts.
 # Returns
 Tuple of (output, auxiliary_loss) where auxiliary_loss is 0 during inference.
 """
-# Example
-#=
-# Using config
-config = FluxMoEConfig(input_dim=768, hidden_dim=3072, output_dim=768, 
-                       num_experts=8, top_k=2, expert_type=:gated)
-moe = FluxMoELayer(config)
 
-# Using convenience constructor  
-moe = FluxMoELayer(768, 3072, 768; num_experts=8, top_k=2, expert_type=:standard)
-
-# Forward pass
-x = randn(Float32, 768, 32)
-y, aux_loss = moe(x; training=true)
-=#
 
 struct FluxMoELayer{E, R, L}
     experts::E
@@ -85,7 +75,12 @@ function FluxMoELayer(config::FluxMoEConfig)
         end
     end
     
-    gate_type = FluxTopKGating(config.top_k)
+    gate_type = if !isnothing(config.custom_gate_type)
+        config.custom_gate_type
+    else
+        FluxTopKGating(config.top_k)
+    end
+    
     router = FluxRouter(
         config.input_dim, 
         config.num_experts, 
@@ -100,6 +95,7 @@ function FluxMoELayer(config::FluxMoEConfig)
     
     return FluxMoELayer(experts, router, balance_loss, config)
 end
+
 """
     process_expert_forward_clean(experts, x, expert_indices, expert_gates, training, output_dim)
 
@@ -169,51 +165,24 @@ function (moe::FluxMoELayer)(x::AbstractVecOrMat; training::Bool=false)
     return output, aux_loss
 end
 
-function (moe::FluxMoELayer)(x::AbstractVecOrMat; training::Bool=false)
-    if x isa AbstractVector
-        x = reshape(x, :, 1)
-        squeeze_output = true
-    else
-        squeeze_output = false
-    end
-    
-    batch_size = size(x, 2)
-    config = moe.config
-    
-    expert_indices, expert_gates, router_probs, router_logits = 
-        moe.router(x; training=training)
-    
-    output = process_expert_forward_clean(
-        moe.experts, x, expert_indices, expert_gates, training, config.output_dim
-    )
-    aux_loss = 0.0f0
-    if training
-        aux_loss = compute_loss(moe.balance_loss, expert_indices, router_probs)
-        
-        if config.z_loss_weight > 0
-            z_loss_fn = FluxZLoss(config.z_loss_weight)
-            aux_loss += compute_loss(z_loss_fn, router_logits)
-        end
-    end
-    
-    if squeeze_output
-        output = vec(output)
-    end
-    
-    return output, aux_loss
-end
-
 function Base.show(io::IO, moe::FluxMoELayer)
     config = moe.config
+    gate_info = if !isnothing(config.custom_gate_type)
+        typeof(config.custom_gate_type).name
+    else
+        "top_k=$(config.top_k)"
+    end
+    
     print(io, "FluxMoELayer(")
     print(io, "$(config.input_dim) => $(config.output_dim), ")
     print(io, "$(config.num_experts) experts, ")
-    print(io, "top_k=$(config.top_k), ")
+    print(io, "$gate_info, ")
     print(io, "$(config.expert_type))")
 end
 
 function FluxMoELayer(input_dim::Int, hidden_dim::Int, output_dim::Int;
                      num_experts::Int=8, top_k::Int=2, expert_type::Symbol=:standard,
+                     custom_gate_type::Union{Nothing, GatingMechanism}=nothing,
                      kwargs...)
     config = FluxMoEConfig(;
         input_dim=input_dim,
@@ -222,6 +191,7 @@ function FluxMoELayer(input_dim::Int, hidden_dim::Int, output_dim::Int;
         num_experts=num_experts,
         top_k=top_k,
         expert_type=expert_type,
+        custom_gate_type=custom_gate_type,
         kwargs...
     )
     return FluxMoELayer(config)
@@ -234,4 +204,35 @@ Convenience function to create FluxMoEConfig with keyword arguments.
 """
 function create_flux_moe_config(; kwargs...)
     return FluxMoEConfig(; kwargs...)
+end
+
+
+"""
+    create_expert_choice_moe_layer(input_dim, hidden_dim, output_dim, num_experts; 
+                                   capacity_factor=1.25f0, kwargs...)
+
+Convenience function to create a FluxMoELayer with FluxExpertChoiceGating.
+"""
+function create_expert_choice_moe_layer(input_dim::Int, hidden_dim::Int, output_dim::Int, 
+                                       num_experts::Int; 
+                                       capacity_factor::Float32=1.25f0, kwargs...)
+    return FluxMoELayer(input_dim, hidden_dim, output_dim;
+                       num_experts=num_experts,
+                       custom_gate_type=FluxExpertChoiceGating(capacity_factor),
+                       kwargs...)
+end
+
+"""
+    create_topk_moe_layer(input_dim, hidden_dim, output_dim, num_experts; 
+                          top_k=2, kwargs...)
+
+Convenience function to create a FluxMoELayer with FluxTopKGating (default behavior).
+"""
+function create_topk_moe_layer(input_dim::Int, hidden_dim::Int, output_dim::Int, 
+                              num_experts::Int; 
+                              top_k::Int=2, kwargs...)
+    return FluxMoELayer(input_dim, hidden_dim, output_dim;
+                       num_experts=num_experts,
+                       top_k=top_k,
+                       kwargs...)
 end
