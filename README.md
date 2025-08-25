@@ -612,14 +612,12 @@ end
 
 ### Custom Expert Choice Configurations
 ```julia
-# Research
 research_config = moe_gpt2_expert_choice_config(
     size = :medium,
     capacity_factor = 2.0f0,
     specialization_strength = 0.8f0
 )
 
-# Production
 production_config = moe_gpt2_expert_choice_config(
     size = :base,
     capacity_factor = 1.1f0,
@@ -634,7 +632,6 @@ production_config = moe_gpt2_expert_choice_config(
 
 ```julia
 
-# Recommended: new GPT-2 specific functions
 new_config = moe_gpt2_base_config()
 new_medium = moe_gpt2_medium_config()
 new_large = moe_gpt2_large_config()
@@ -653,3 +650,4 @@ new_large = moe_gpt2_large_config()
 
  **Choose TopK** for research & interpretability  
  **Choose Expert Choice** for production & training efficiency
+
